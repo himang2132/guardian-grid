@@ -1,6 +1,6 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { CityGraph, TrafficLevel, PathResult, Ambulance, Emergency } from '@/lib/types';
-import { generateCityGraph, updateTrafficLevels, randomizeTraffic } from '@/lib/graphEngine';
+import { generateCityGraph, updateTrafficLevels, randomizeTraffic, tickTraffic } from '@/lib/graphEngine';
 import { dijkstra, greedyBestFirst } from '@/lib/algorithms';
 import GraphVisualization from '@/components/GraphVisualization';
 import AlgorithmComparison from '@/components/AlgorithmComparison';
@@ -30,6 +30,16 @@ const Index: React.FC = () => {
   const [emergencies, setEmergencies] = useState<Emergency[]>([]);
   const [currentEmergency, setCurrentEmergency] = useState<Emergency | null>(null);
   const [selectionMode, setSelectionMode] = useState<'start' | 'end'>('start');
+  const [dynamicTraffic, setDynamicTraffic] = useState(true);
+
+  // Dynamic traffic: auto-tick every 3 seconds
+  useEffect(() => {
+    if (!dynamicTraffic) return;
+    const interval = setInterval(() => {
+      setGraph(prev => tickTraffic(prev, 0.12));
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [dynamicTraffic]);
 
   const totalEmergencies = emergencies.length;
   const activeAmbulances = ambulances.filter(a => a.state !== 'available').length;
@@ -205,6 +215,19 @@ const Index: React.FC = () => {
         {/* Left sidebar */}
         <div className="space-y-4">
           <TrafficControls currentLevel={trafficLevel} onSetLevel={handleTrafficChange} onRandomize={handleRandomize} />
+          
+          {/* Dynamic traffic toggle */}
+          <div className="panel-gradient border border-border rounded-lg p-3 flex items-center justify-between">
+            <span className="font-orbitron text-xs text-foreground">⚡ LIVE TRAFFIC</span>
+            <button
+              onClick={() => setDynamicTraffic(d => !d)}
+              className={`px-3 py-1 rounded text-xs font-orbitron font-bold transition-all ${
+                dynamicTraffic ? 'bg-accent text-accent-foreground' : 'bg-secondary text-muted-foreground'
+              }`}
+            >
+              {dynamicTraffic ? 'ON' : 'OFF'}
+            </button>
+          </div>
           
           <div className="panel-gradient border border-border rounded-lg p-4">
             <h3 className="font-orbitron text-sm text-foreground mb-3">ROUTE CALCULATION</h3>
