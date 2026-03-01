@@ -11,7 +11,6 @@ export function generateCityGraph(): CityGraph {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
 
-  // Create a grid-like layout with some randomness for organic feel
   const cols = 8;
   const rows = 5;
   const spacingX = 120;
@@ -25,7 +24,6 @@ export function generateCityGraph(): CityGraph {
   for (let r = 0; r < rows; r++) {
     grid[r] = [];
     for (let c = 0; c < cols; c++) {
-      // Skip some positions for organic feel
       if (Math.random() < 0.1 && nodeIndex > 3) {
         grid[r][c] = null;
         continue;
@@ -56,23 +54,19 @@ export function generateCityGraph(): CityGraph {
     for (let c = 0; c < cols; c++) {
       const current = grid[r][c];
       if (!current) continue;
-
-      // Right neighbor
       if (c + 1 < cols && grid[r][c + 1]) {
         addEdge(edges, nodes, current, grid[r][c + 1]!);
       }
-      // Bottom neighbor
       if (r + 1 < rows && grid[r + 1]?.[c]) {
         addEdge(edges, nodes, current, grid[r + 1][c]!);
       }
-      // Diagonal (sometimes)
       if (Math.random() < 0.3 && r + 1 < rows && c + 1 < cols && grid[r + 1]?.[c + 1]) {
         addEdge(edges, nodes, current, grid[r + 1][c + 1]!);
       }
     }
   }
 
-  // Add some extra cross-connections for variety
+  // Extra cross-connections
   for (let i = 0; i < 5; i++) {
     const a = nodes[Math.floor(Math.random() * nodes.length)];
     const b = nodes[Math.floor(Math.random() * nodes.length)];
@@ -91,8 +85,8 @@ function addEdge(edges: GraphEdge[], nodes: GraphNode[], from: string, to: strin
   const nodeA = nodes.find(n => n.id === from)!;
   const nodeB = nodes.find(n => n.id === to)!;
   const pixelDist = Math.sqrt((nodeA.x - nodeB.x) ** 2 + (nodeA.y - nodeB.y) ** 2);
-  const distance = Math.round(pixelDist / 30 * 10) / 10; // Convert to km-like unit
-  const baseWeight = Math.round(distance * 60); // ~60s per km base
+  const distance = Math.round(pixelDist / 30 * 10) / 10;
+  const baseWeight = Math.round(distance * 60);
 
   const trafficLevels: TrafficLevel[] = ['low', 'medium', 'high'];
   const traffic = trafficLevels[Math.floor(Math.random() * 3)];
@@ -106,27 +100,19 @@ export function getEffectiveWeight(edge: GraphEdge): number {
 
 export function buildAdjacencyList(graph: CityGraph): Map<string, { neighbor: string; weight: number; distance: number }[]> {
   const adj = new Map<string, { neighbor: string; weight: number; distance: number }[]>();
-  
-  for (const node of graph.nodes) {
-    adj.set(node.id, []);
-  }
-
+  for (const node of graph.nodes) adj.set(node.id, []);
   for (const edge of graph.edges) {
     const w = getEffectiveWeight(edge);
     adj.get(edge.from)!.push({ neighbor: edge.to, weight: w, distance: edge.distance });
     adj.get(edge.to)!.push({ neighbor: edge.from, weight: w, distance: edge.distance });
   }
-
   return adj;
 }
 
 export function updateTrafficLevels(graph: CityGraph, globalLevel: TrafficLevel): CityGraph {
   return {
     ...graph,
-    edges: graph.edges.map(e => ({
-      ...e,
-      trafficLevel: globalLevel,
-    })),
+    edges: graph.edges.map(e => ({ ...e, trafficLevel: globalLevel })),
   };
 }
 
@@ -134,9 +120,24 @@ export function randomizeTraffic(graph: CityGraph): CityGraph {
   const levels: TrafficLevel[] = ['low', 'medium', 'high'];
   return {
     ...graph,
-    edges: graph.edges.map(e => ({
-      ...e,
-      trafficLevel: levels[Math.floor(Math.random() * 3)],
-    })),
+    edges: graph.edges.map(e => ({ ...e, trafficLevel: levels[Math.floor(Math.random() * 3)] })),
+  };
+}
+
+/** Shift a portion of edges' traffic levels randomly — used for dynamic/live traffic */
+export function tickTraffic(graph: CityGraph, changeRate: number = 0.15): CityGraph {
+  const levels: TrafficLevel[] = ['low', 'medium', 'high'];
+  return {
+    ...graph,
+    edges: graph.edges.map(e => {
+      if (Math.random() < changeRate) {
+        // Bias towards adjacent traffic level for realism
+        const idx = levels.indexOf(e.trafficLevel);
+        const shift = Math.random() < 0.5 ? -1 : 1;
+        const newIdx = Math.max(0, Math.min(2, idx + shift));
+        return { ...e, trafficLevel: levels[newIdx] };
+      }
+      return e;
+    }),
   };
 }
