@@ -14,16 +14,187 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      ambulances: {
+        Row: {
+          cases_handled: number
+          cases_rejected: number
+          created_at: string
+          current_node: string
+          driver_id: string | null
+          id: string
+          name: string
+          status: string
+        }
+        Insert: {
+          cases_handled?: number
+          cases_rejected?: number
+          created_at?: string
+          current_node?: string
+          driver_id?: string | null
+          id?: string
+          name: string
+          status?: string
+        }
+        Update: {
+          cases_handled?: number
+          cases_rejected?: number
+          created_at?: string
+          current_node?: string
+          driver_id?: string | null
+          id?: string
+          name?: string
+          status?: string
+        }
+        Relationships: []
+      }
+      emergencies: {
+        Row: {
+          case_type: string
+          created_at: string
+          id: string
+          patient_name: string
+          patient_node: string
+          patient_phone: string | null
+          priority: number
+          reported_by: string | null
+          response_time_max: number
+          response_time_min: number
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          case_type: string
+          created_at?: string
+          id?: string
+          patient_name: string
+          patient_node: string
+          patient_phone?: string | null
+          priority?: number
+          reported_by?: string | null
+          response_time_max?: number
+          response_time_min?: number
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          case_type?: string
+          created_at?: string
+          id?: string
+          patient_name?: string
+          patient_node?: string
+          patient_phone?: string | null
+          priority?: number
+          reported_by?: string | null
+          response_time_max?: number
+          response_time_min?: number
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      emergency_assignments: {
+        Row: {
+          action: string
+          ambulance_id: string
+          assigned_at: string
+          emergency_id: string
+          id: string
+          responded_at: string | null
+          route_data: Json | null
+        }
+        Insert: {
+          action?: string
+          ambulance_id: string
+          assigned_at?: string
+          emergency_id: string
+          id?: string
+          responded_at?: string | null
+          route_data?: Json | null
+        }
+        Update: {
+          action?: string
+          ambulance_id?: string
+          assigned_at?: string
+          emergency_id?: string
+          id?: string
+          responded_at?: string | null
+          route_data?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "emergency_assignments_ambulance_id_fkey"
+            columns: ["ambulance_id"]
+            isOneToOne: false
+            referencedRelation: "ambulances"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "emergency_assignments_emergency_id_fkey"
+            columns: ["emergency_id"]
+            isOneToOne: false
+            referencedRelation: "emergencies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          created_at: string
+          full_name: string
+          id: string
+          phone: string | null
+        }
+        Insert: {
+          created_at?: string
+          full_name?: string
+          id: string
+          phone?: string | null
+        }
+        Update: {
+          created_at?: string
+          full_name?: string
+          id?: string
+          phone?: string | null
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      get_user_role: {
+        Args: { _user_id: string }
+        Returns: Database["public"]["Enums"]["app_role"]
+      }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "driver" | "user"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +321,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "driver", "user"],
+    },
   },
 } as const
