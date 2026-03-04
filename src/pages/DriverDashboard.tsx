@@ -247,6 +247,19 @@ const DriverDashboard: React.FC = () => {
           {/* Center: Map */}
           <div className="lg:col-span-3">
             <div className="panel-gradient border border-border rounded-lg p-2 h-[600px]">
+              <div className="flex items-center justify-between px-2 mb-1">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />
+                  <span className="text-xs font-orbitron text-accent">LIVE TRAFFIC</span>
+                  <span className="text-xs text-muted-foreground font-mono-tech">Route recalculates every 3s</span>
+                </div>
+                {dijkstraResult && (
+                  <div className="text-xs font-mono-tech text-muted-foreground">
+                    Dijkstra: <span className="text-emergency-blue font-bold">{dijkstraResult.totalCost}s</span>
+                    {greedyResult && <> | Greedy: <span className="text-emergency-yellow font-bold">{greedyResult.totalCost}s</span></>}
+                  </div>
+                )}
+              </div>
               <GraphVisualization
                 graph={graph}
                 selectedStart={myAmbulance?.current_node ?? null}
