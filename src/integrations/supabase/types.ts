@@ -192,6 +192,18 @@ export type Database = {
         }
         Returns: boolean
       }
+      is_driver_ambulance: {
+        Args: { _ambulance_id: string; _user_id: string }
+        Returns: boolean
+      }
+      is_driver_assigned_emergency: {
+        Args: { _emergency_id: string; _user_id: string }
+        Returns: boolean
+      }
+      is_emergency_reporter: {
+        Args: { _emergency_id: string; _user_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       app_role: "admin" | "driver" | "user"
