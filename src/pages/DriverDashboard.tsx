@@ -67,22 +67,40 @@ const DriverDashboard: React.FC = () => {
   useEffect(() => {
     if (!user) return;
     const fetchData = async () => {
-      const { data: amb } = await supabase
+      const { data: ambulances, error: ambError } = await supabase
         .from('ambulances')
         .select('*')
         .eq('driver_id', user.id)
-        .single();
-      if (amb) setMyAmbulance(amb);
+        .order('created_at', { ascending: false });
 
-      if (amb) {
-        const { data: assignments } = await supabase
-          .from('emergency_assignments')
-          .select('*, emergency:emergencies(*)')
-          .eq('ambulance_id', amb.id)
-          .order('assigned_at', { ascending: false })
-          .limit(20);
-        if (assignments) setAssignedCases(assignments as any[]);
+      if (ambError || !ambulances || ambulances.length === 0) {
+        setMyAmbulance(null);
+        setAssignedCases([]);
+        return;
       }
+
+      const statusRank: Record<string, number> = {
+        'en-route': 0,
+        assigned: 1,
+        available: 2,
+        completed: 3,
+      };
+
+      const primaryAmbulance = [...ambulances].sort(
+        (a, b) => (statusRank[a.status] ?? 99) - (statusRank[b.status] ?? 99)
+      )[0];
+
+      setMyAmbulance(primaryAmbulance);
+
+      const ambulanceIds = ambulances.map((a) => a.id);
+      const { data: assignments } = await supabase
+        .from('emergency_assignments')
+        .select('*, emergency:emergencies(*)')
+        .in('ambulance_id', ambulanceIds)
+        .order('assigned_at', { ascending: false })
+        .limit(20);
+
+      if (assignments) setAssignedCases(assignments as any[]);
     };
     fetchData();
 
