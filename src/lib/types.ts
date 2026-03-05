@@ -14,6 +14,8 @@ export interface GraphEdge {
   baseWeight: number; // base travel time in seconds
   distance: number; // km
   trafficLevel: 'low' | 'medium' | 'high';
+  directed?: boolean; // true = one-way from→to
+  blocked?: boolean; // true = road closed
 }
 
 export interface CityGraph {
@@ -27,7 +29,7 @@ export interface PathResult {
   totalDistance: number;
   nodesVisited: number;
   executionTime: number;
-  algorithm: 'dijkstra' | 'greedy';
+  algorithm: 'dijkstra' | 'greedy' | 'astar';
   visitedOrder: string[];
 }
 
@@ -52,5 +54,23 @@ export interface Emergency {
   assignedAmbulance?: string;
   dijkstraResult?: PathResult;
   greedyResult?: PathResult;
-  selectedAlgorithm?: 'dijkstra' | 'greedy';
+  astarResult?: PathResult;
+  selectedAlgorithm?: 'dijkstra' | 'greedy' | 'astar';
+  escalationLevel?: number; // 0=normal, 1=elevated, 2=critical broadcast
+  escalatedAt?: number;
+}
+
+export interface AnalyticsEntry {
+  timestamp: number;
+  emergencyId: string;
+  caseType: string;
+  dijkstraCost: number;
+  greedyCost: number;
+  astarCost: number;
+  dijkstraDistance: number;
+  greedyDistance: number;
+  astarDistance: number;
+  winner: 'dijkstra' | 'greedy' | 'astar';
+  responseTimeSec: number;
+  onTime: boolean;
 }

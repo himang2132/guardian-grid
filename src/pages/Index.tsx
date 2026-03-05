@@ -1,13 +1,16 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { CityGraph, TrafficLevel, PathResult, Ambulance, Emergency } from '@/lib/types';
+import { CityGraph, TrafficLevel, PathResult, Ambulance, Emergency, AnalyticsEntry } from '@/lib/types';
 import { generateCityGraph, updateTrafficLevels, randomizeTraffic, tickTraffic } from '@/lib/graphEngine';
-import { dijkstra, greedyBestFirst } from '@/lib/algorithms';
+import { dijkstra, greedyBestFirst, astar } from '@/lib/algorithms';
+import { getPriorityInfo } from '@/lib/priorities';
 import GraphVisualization from '@/components/GraphVisualization';
 import AlgorithmComparison from '@/components/AlgorithmComparison';
 import EmergencyPanel from '@/components/EmergencyPanel';
 import AmbulanceList from '@/components/AmbulanceList';
 import TrafficControls from '@/components/TrafficControls';
 import StatsBar from '@/components/StatsBar';
+import LiveEtaCountdown from '@/components/LiveEtaCountdown';
+import AnalyticsDashboard from '@/components/AnalyticsDashboard';
 
 const EMERGENCY_TYPES = ['Cardiac Arrest', 'Road Accident', 'Stroke', 'Burns', 'Fracture', 'Breathing Difficulty'];
 const NAMES = ['Rohit Kumar', 'Priya Sharma', 'Anil Verma', 'Meena Patel', 'Suresh Nair', 'Deepa Reddy'];
@@ -19,6 +22,8 @@ const INITIAL_AMBULANCES: Ambulance[] = [
   { id: 'AMB-104', name: 'Ambulance 104', currentNode: 'N25', state: 'available' },
 ];
 
+const ESCALATION_TIMEOUT_MS = 15000; // 15s before escalation
+
 const Index: React.FC = () => {
   const [graph, setGraph] = useState<CityGraph>(() => generateCityGraph());
   const [trafficLevel, setTrafficLevel] = useState<TrafficLevel>('medium');
@@ -26,11 +31,17 @@ const Index: React.FC = () => {
   const [selectedEnd, setSelectedEnd] = useState<string | null>(null);
   const [dijkstraResult, setDijkstraResult] = useState<PathResult | null>(null);
   const [greedyResult, setGreedyResult] = useState<PathResult | null>(null);
+  const [astarResult, setAstarResult] = useState<PathResult | null>(null);
   const [ambulances, setAmbulances] = useState<Ambulance[]>(INITIAL_AMBULANCES);
   const [emergencies, setEmergencies] = useState<Emergency[]>([]);
   const [currentEmergency, setCurrentEmergency] = useState<Emergency | null>(null);
   const [selectionMode, setSelectionMode] = useState<'start' | 'end'>('start');
   const [dynamicTraffic, setDynamicTraffic] = useState(true);
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsEntry[]>([]);
+  const [ambulanceAnim, setAmbulanceAnim] = useState<{ nodeIndex: number; progress: number } | null>(null);
+  const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const escalationRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Dynamic traffic: auto-tick every 3 seconds
   useEffect(() => {
@@ -40,6 +51,15 @@ const Index: React.FC = () => {
     }, 3000);
     return () => clearInterval(interval);
   }, [dynamicTraffic]);
+
+  // Recalculate paths when traffic changes dynamically
+  useEffect(() => {
+    if (selectedStart && selectedEnd) {
+      setDijkstraResult(dijkstra(graph, selectedStart, selectedEnd));
+      setGreedyResult(greedyBestFirst(graph, selectedStart, selectedEnd));
+      setAstarResult(astar(graph, selectedStart, selectedEnd));
+    }
+  }, [graph, selectedStart, selectedEnd]);
 
   const totalEmergencies = emergencies.length;
   const activeAmbulances = ambulances.filter(a => a.state !== 'available').length;
@@ -56,28 +76,72 @@ const Index: React.FC = () => {
       setSelectionMode('end');
       setDijkstraResult(null);
       setGreedyResult(null);
+      setAstarResult(null);
+      setAmbulanceAnim(null);
     } else {
       setSelectedEnd(nodeId);
       setSelectionMode('start');
-      // Run both algorithms
       const dResult = dijkstra(graph, selectedStart!, nodeId);
       const gResult = greedyBestFirst(graph, selectedStart!, nodeId);
+      const aResult = astar(graph, selectedStart!, nodeId);
       setDijkstraResult(dResult);
       setGreedyResult(gResult);
+      setAstarResult(aResult);
     }
   }, [selectionMode, selectedStart, graph]);
 
   const handleTrafficChange = useCallback((level: TrafficLevel) => {
     setTrafficLevel(level);
     setGraph(prev => updateTrafficLevels(prev, level));
-    setDijkstraResult(null);
-    setGreedyResult(null);
   }, []);
 
   const handleRandomize = useCallback(() => {
     setGraph(prev => randomizeTraffic(prev));
-    setDijkstraResult(null);
-    setGreedyResult(null);
+  }, []);
+
+  // Start ambulance animation along path
+  const startAmbulanceAnimation = useCallback((path: string[]) => {
+    if (animRef.current) clearInterval(animRef.current);
+    if (path.length < 2) return;
+    setAmbulanceAnim({ nodeIndex: 0, progress: 0 });
+    const speed = 0.02; // progress per tick
+    animRef.current = setInterval(() => {
+      setAmbulanceAnim(prev => {
+        if (!prev) return null;
+        let { nodeIndex, progress } = prev;
+        progress += speed;
+        if (progress >= 1) {
+          nodeIndex++;
+          progress = 0;
+        }
+        if (nodeIndex >= path.length - 1) {
+          if (animRef.current) clearInterval(animRef.current);
+          return null;
+        }
+        return { nodeIndex, progress };
+      });
+    }, 50);
+  }, []);
+
+  // Auto-escalation logic
+  const startEscalation = useCallback((emergency: Emergency) => {
+    if (escalationRef.current) clearTimeout(escalationRef.current);
+    escalationRef.current = setTimeout(() => {
+      setCurrentEmergency(prev => {
+        if (prev && prev.id === emergency.id && prev.status === 'pending') {
+          const escalated = { ...prev, escalationLevel: (prev.escalationLevel ?? 0) + 1, escalatedAt: Date.now() };
+          // Level 2 = broadcast to all
+          if (escalated.escalationLevel! >= 2) {
+            // Auto-accept with nearest ambulance
+            return escalated;
+          }
+          // Schedule next escalation
+          startEscalation(escalated);
+          return escalated;
+        }
+        return prev;
+      });
+    }, ESCALATION_TIMEOUT_MS);
   }, []);
 
   const handleNewEmergency = useCallback(() => {
@@ -91,71 +155,125 @@ const Index: React.FC = () => {
       emergencyType: EMERGENCY_TYPES[Math.floor(Math.random() * EMERGENCY_TYPES.length)],
       timestamp: Date.now(),
       status: 'pending',
+      escalationLevel: 0,
     };
     setCurrentEmergency(emergency);
     setSelectedEnd(patientNode.id);
     setSelectionMode('start');
-  }, [graph]);
+    startEscalation(emergency);
+  }, [graph, startEscalation]);
 
+  // Multi-ambulance dispatch optimization: find THE best ambulance across all available
   const handleAcceptEmergency = useCallback(() => {
     if (!currentEmergency) return;
-    // Find nearest available ambulance
+    if (escalationRef.current) clearTimeout(escalationRef.current);
     const available = ambulances.filter(a => a.state === 'available');
     if (available.length === 0) return;
 
-    // Use dijkstra to find closest ambulance
+    // Find optimal ambulance (minimum cost across all three algorithms)
     let bestAmb = available[0];
     let bestCost = Infinity;
-    let bestResult: PathResult | null = null;
+    let bestDijkstra: PathResult | null = null;
+    let bestGreedy: PathResult | null = null;
+    let bestAstar: PathResult | null = null;
 
     for (const amb of available) {
-      const result = dijkstra(graph, amb.currentNode, currentEmergency.patientNode);
-      if (result.totalCost < bestCost) {
-        bestCost = result.totalCost;
+      const dResult = dijkstra(graph, amb.currentNode, currentEmergency.patientNode);
+      const gResult = greedyBestFirst(graph, amb.currentNode, currentEmergency.patientNode);
+      const aResult = astar(graph, amb.currentNode, currentEmergency.patientNode);
+      // Use minimum of all three as the true best
+      const minCost = Math.min(dResult.totalCost, gResult.totalCost, aResult.totalCost);
+      if (minCost < bestCost) {
+        bestCost = minCost;
         bestAmb = amb;
-        bestResult = result;
+        bestDijkstra = dResult;
+        bestGreedy = gResult;
+        bestAstar = aResult;
       }
     }
 
-    const gResult = greedyBestFirst(graph, bestAmb.currentNode, currentEmergency.patientNode);
-
     setSelectedStart(bestAmb.currentNode);
     setSelectedEnd(currentEmergency.patientNode);
-    setDijkstraResult(bestResult);
-    setGreedyResult(gResult);
+    setDijkstraResult(bestDijkstra);
+    setGreedyResult(bestGreedy);
+    setAstarResult(bestAstar);
+
+    // Determine winner algorithm
+    const costs = [
+      { algo: 'dijkstra' as const, cost: bestDijkstra?.totalCost ?? Infinity },
+      { algo: 'greedy' as const, cost: bestGreedy?.totalCost ?? Infinity },
+      { algo: 'astar' as const, cost: bestAstar?.totalCost ?? Infinity },
+    ];
+    const winner = costs.reduce((a, b) => a.cost <= b.cost ? a : b);
+    const winnerPath = winner.algo === 'dijkstra' ? bestDijkstra : winner.algo === 'astar' ? bestAstar : bestGreedy;
+
+    // Start ambulance animation on the winning path
+    if (winnerPath?.path && winnerPath.path.length >= 2) {
+      startAmbulanceAnimation(winnerPath.path);
+    }
+
+    const pInfo = getPriorityInfo(currentEmergency.emergencyType);
+    const onTime = (bestDijkstra?.totalCost ?? Infinity) / 60 <= pInfo.responseTimeMax;
+
+    // Record analytics
+    const entry: AnalyticsEntry = {
+      timestamp: Date.now(),
+      emergencyId: currentEmergency.id,
+      caseType: currentEmergency.emergencyType,
+      dijkstraCost: bestDijkstra?.totalCost ?? 0,
+      greedyCost: bestGreedy?.totalCost ?? 0,
+      astarCost: bestAstar?.totalCost ?? 0,
+      dijkstraDistance: bestDijkstra?.totalDistance ?? 0,
+      greedyDistance: bestGreedy?.totalDistance ?? 0,
+      astarDistance: bestAstar?.totalDistance ?? 0,
+      winner: winner.algo,
+      responseTimeSec: bestCost,
+      onTime,
+    };
+    setAnalyticsData(prev => [...prev, entry]);
 
     const updatedEmergency: Emergency = {
       ...currentEmergency,
       status: 'in-progress',
       assignedAmbulance: bestAmb.id,
-      dijkstraResult: bestResult!,
-      greedyResult: gResult,
+      dijkstraResult: bestDijkstra!,
+      greedyResult: bestGreedy!,
+      astarResult: bestAstar!,
+      selectedAlgorithm: winner.algo,
     };
 
     setCurrentEmergency(updatedEmergency);
     setAmbulances(prev => prev.map(a => a.id === bestAmb.id ? { ...a, state: 'en-route', assignedEmergency: currentEmergency.id } : a));
     setEmergencies(prev => [...prev, updatedEmergency]);
 
-    // Auto-resolve after 5 seconds
+    // Auto-resolve after animation completes (~path length * 50ms per segment / speed)
+    const animDuration = Math.max(5000, (winnerPath?.path?.length ?? 5) * 2500);
     setTimeout(() => {
       setCurrentEmergency(prev => prev ? { ...prev, status: 'resolved' } : null);
       setAmbulances(prev => prev.map(a => a.id === bestAmb.id ? { ...a, state: 'available', assignedEmergency: undefined } : a));
       setEmergencies(prev => prev.map(e => e.id === updatedEmergency.id ? { ...e, status: 'resolved' } : e));
-    }, 5000);
-  }, [currentEmergency, ambulances, graph]);
+      setAmbulanceAnim(null);
+    }, animDuration);
+  }, [currentEmergency, ambulances, graph, startAmbulanceAnimation]);
 
   const handleRejectEmergency = useCallback(() => {
+    if (escalationRef.current) clearTimeout(escalationRef.current);
     setCurrentEmergency(null);
     setSelectedEnd(null);
+    setAmbulanceAnim(null);
   }, []);
 
   const handleRegenerate = useCallback(() => {
+    if (animRef.current) clearInterval(animRef.current);
+    if (escalationRef.current) clearTimeout(escalationRef.current);
     setGraph(generateCityGraph());
     setSelectedStart(null);
     setSelectedEnd(null);
     setDijkstraResult(null);
     setGreedyResult(null);
+    setAstarResult(null);
     setCurrentEmergency(null);
+    setAmbulanceAnim(null);
   }, []);
 
   return (
@@ -182,7 +300,7 @@ const Index: React.FC = () => {
             <>
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">⏱️ ETA:</span>
-                <span className="font-mono-tech text-emergency-green font-bold">
+                <span className="font-mono-tech text-accent font-bold">
                   {Math.floor(dijkstraResult.totalCost / 60)}m {dijkstraResult.totalCost % 60}s
                 </span>
               </div>
@@ -197,6 +315,12 @@ const Index: React.FC = () => {
           <span className={`px-2 py-0.5 rounded text-xs font-orbitron ${selectionMode === 'start' ? 'bg-emergency-blue/20 text-emergency-blue' : 'bg-primary/20 text-primary'}`}>
             Select: {selectionMode === 'start' ? 'AMBULANCE' : 'PATIENT'}
           </span>
+          <button
+            onClick={() => setShowAnalytics(a => !a)}
+            className={`px-3 py-0.5 rounded text-xs font-orbitron font-bold transition-colors ${showAnalytics ? 'bg-emergency-blue/20 text-emergency-blue' : 'bg-secondary text-muted-foreground'}`}
+          >
+            📊 ANALYTICS
+          </button>
         </div>
       </div>
 
@@ -209,6 +333,13 @@ const Index: React.FC = () => {
           resolvedCases={resolvedCases}
         />
       </div>
+
+      {/* Analytics Dashboard */}
+      {showAnalytics && (
+        <div className="px-6 pb-4">
+          <AnalyticsDashboard entries={analyticsData} />
+        </div>
+      )}
 
       {/* Main content */}
       <div className="px-6 pb-6 grid grid-cols-1 lg:grid-cols-4 gap-4">
@@ -232,11 +363,18 @@ const Index: React.FC = () => {
           <div className="panel-gradient border border-border rounded-lg p-4">
             <h3 className="font-orbitron text-sm text-foreground mb-3">ROUTE CALCULATION</h3>
             <div className="text-xs space-y-1 text-muted-foreground">
-              <p>• Algorithm: <span className="text-emergency-green font-mono-tech">Dijkstra + Greedy BFS</span></p>
+              <p>• Algorithms: <span className="text-accent font-mono-tech">Dijkstra + Greedy + A*</span></p>
               <p>• Nodes: <span className="text-foreground font-mono-tech">{graph.nodes.length}</span></p>
               <p>• Edges: <span className="text-foreground font-mono-tech">{graph.edges.length}</span></p>
+              <p>• One-way: <span className="text-emergency-blue font-mono-tech">{graph.edges.filter(e => e.directed).length}</span></p>
+              <p>• Closed: <span className="text-primary font-mono-tech">{graph.edges.filter(e => e.blocked).length}</span></p>
             </div>
           </div>
+
+          {/* Live ETA Countdown */}
+          {dijkstraResult && currentEmergency?.status === 'in-progress' && (
+            <LiveEtaCountdown totalCostSeconds={dijkstraResult.totalCost} label="⏱️ LIVE ETA" />
+          )}
 
           <AmbulanceList ambulances={ambulances} />
         </div>
@@ -250,7 +388,10 @@ const Index: React.FC = () => {
               selectedEnd={selectedEnd}
               pathResult={dijkstraResult}
               secondaryPath={greedyResult}
+              tertiaryPath={astarResult}
               onNodeClick={handleNodeClick}
+              ambulancePosition={ambulanceAnim}
+              showHeatmap={true}
             />
           </div>
         </div>
@@ -267,14 +408,29 @@ const Index: React.FC = () => {
           </div>
 
           {currentEmergency && (
-            <EmergencyPanel
-              emergency={currentEmergency}
-              onAccept={handleAcceptEmergency}
-              onReject={handleRejectEmergency}
-            />
+            <>
+              <EmergencyPanel
+                emergency={currentEmergency}
+                onAccept={handleAcceptEmergency}
+                onReject={handleRejectEmergency}
+              />
+              {/* Escalation indicator */}
+              {currentEmergency.escalationLevel !== undefined && currentEmergency.escalationLevel > 0 && currentEmergency.status === 'pending' && (
+                <div className={`panel-gradient border rounded-lg p-3 text-center ${
+                  currentEmergency.escalationLevel >= 2 ? 'border-primary glow-red animate-pulse-emergency' : 'border-emergency-orange'
+                }`}>
+                  <p className="font-orbitron text-xs text-foreground">
+                    ⚠️ ESCALATION LEVEL {currentEmergency.escalationLevel}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {currentEmergency.escalationLevel >= 2 ? 'BROADCASTING TO ALL UNITS' : 'Response overdue — escalating...'}
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
-          <AlgorithmComparison dijkstra={dijkstraResult} greedy={greedyResult} />
+          <AlgorithmComparison dijkstra={dijkstraResult} greedy={greedyResult} astar={astarResult} />
 
           {/* Route summary */}
           {dijkstraResult && (
@@ -292,17 +448,18 @@ const Index: React.FC = () => {
                   </p>
                 </div>
                 <div className="bg-secondary/50 rounded p-2">
-                  <span className="text-muted-foreground">Route Safety</span>
-                  <p className="font-mono-tech text-emergency-green text-lg font-bold">✓ OPTIMAL</p>
+                  <span className="text-muted-foreground">Best Algorithm</span>
+                  <p className="font-mono-tech text-accent text-lg font-bold">
+                    {currentEmergency?.selectedAlgorithm?.toUpperCase() ?? 'DIJKSTRA'}
+                  </p>
                 </div>
                 <div className="bg-secondary/50 rounded p-2">
-                  <span className="text-muted-foreground">Priority</span>
-                  <p className="font-mono-tech text-primary text-lg font-bold">HIGH</p>
+                  <span className="text-muted-foreground">Road Features</span>
+                  <p className="font-mono-tech text-emergency-blue text-sm font-bold">
+                    {graph.edges.filter(e => e.directed).length}↗ {graph.edges.filter(e => e.blocked).length}✕
+                  </p>
                 </div>
               </div>
-              <button className="w-full mt-3 red-bar text-primary-foreground font-orbitron text-xs py-2.5 rounded font-bold tracking-wider hover:opacity-90 transition-opacity">
-                ▶▶ NAVIGATE ROUTE ▶
-              </button>
             </div>
           )}
         </div>

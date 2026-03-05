@@ -8,8 +8,11 @@ interface GraphVisualizationProps {
   selectedEnd: string | null;
   pathResult: PathResult | null;
   secondaryPath: PathResult | null;
+  tertiaryPath?: PathResult | null;
   onNodeClick: (nodeId: string) => void;
   animatedEdges?: Set<string>;
+  ambulancePosition?: { nodeIndex: number; progress: number } | null;
+  showHeatmap?: boolean;
 }
 
 const TRAFFIC_COLORS: Record<TrafficLevel, string> = {
@@ -24,6 +27,12 @@ const TRAFFIC_ROAD_COLORS: Record<TrafficLevel, string> = {
   high: 'hsl(0, 50%, 35%)',
 };
 
+const HEATMAP_COLORS: Record<TrafficLevel, string> = {
+  low: 'hsla(145, 60%, 45%, 0.08)',
+  medium: 'hsla(45, 100%, 55%, 0.12)',
+  high: 'hsla(0, 80%, 50%, 0.18)',
+};
+
 const NODE_COLORS: Record<string, string> = {
   junction: 'hsl(210, 60%, 50%)',
   hospital: 'hsl(0, 80%, 55%)',
@@ -34,7 +43,7 @@ const SVG_W = 1050;
 const SVG_H = 620;
 
 const GraphVisualization: React.FC<GraphVisualizationProps> = ({
-  graph, selectedStart, selectedEnd, pathResult, secondaryPath, onNodeClick, animatedEdges,
+  graph, selectedStart, selectedEnd, pathResult, secondaryPath, tertiaryPath, onNodeClick, animatedEdges, ambulancePosition, showHeatmap = true,
 }) => {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -85,6 +94,31 @@ const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     return set;
   }, [secondaryPath]);
 
+  const tertiaryEdgeSet = useMemo(() => {
+    const set = new Set<string>();
+    if (tertiaryPath?.path) {
+      for (let i = 0; i < tertiaryPath.path.length - 1; i++) {
+        set.add(`${tertiaryPath.path[i]}-${tertiaryPath.path[i + 1]}`);
+        set.add(`${tertiaryPath.path[i + 1]}-${tertiaryPath.path[i]}`);
+      }
+    }
+    return set;
+  }, [tertiaryPath]);
+
+  // Compute ambulance animated position on path
+  const ambulanceXY = useMemo(() => {
+    if (!ambulancePosition || !pathResult?.path || pathResult.path.length < 2) return null;
+    const { nodeIndex, progress } = ambulancePosition;
+    const clampedIdx = Math.min(nodeIndex, pathResult.path.length - 2);
+    const fromNode = graph.nodes.find(n => n.id === pathResult.path[clampedIdx]);
+    const toNode = graph.nodes.find(n => n.id === pathResult.path[clampedIdx + 1]);
+    if (!fromNode || !toNode) return null;
+    return {
+      x: fromNode.x + (toNode.x - fromNode.x) * progress,
+      y: fromNode.y + (toNode.y - fromNode.y) * progress,
+    };
+  }, [ambulancePosition, pathResult, graph.nodes]);
+
   // Generate pseudo-random buildings based on graph seed
   const buildings = useMemo(() => {
     const b: { x: number; y: number; w: number; h: number; opacity: number }[] = [];
@@ -99,25 +133,28 @@ const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     return b;
   }, []);
 
+  // Heatmap zones around edges
+  const heatmapZones = useMemo(() => {
+    if (!showHeatmap) return [];
+    return graph.edges.filter(e => !e.blocked).map(edge => {
+      const from = graph.nodes.find(n => n.id === edge.from)!;
+      const to = graph.nodes.find(n => n.id === edge.to)!;
+      const mx = (from.x + to.x) / 2;
+      const my = (from.y + to.y) / 2;
+      const radius = edge.trafficLevel === 'high' ? 35 : edge.trafficLevel === 'medium' ? 25 : 15;
+      return { cx: mx, cy: my, r: radius, color: HEATMAP_COLORS[edge.trafficLevel], level: edge.trafficLevel };
+    });
+  }, [graph, showHeatmap]);
+
   const viewBox = `${SVG_W / 2 - SVG_W / (2 * zoom) - pan.x} ${SVG_H / 2 - SVG_H / (2 * zoom) - pan.y} ${SVG_W / zoom} ${SVG_H / zoom}`;
 
   return (
     <div className="relative w-full h-full">
       {/* Zoom controls */}
       <div className="absolute top-2 right-2 z-10 flex flex-col gap-1">
-        <button
-          onClick={() => setZoom(z => Math.min(4, z * 1.3))}
-          className="w-8 h-8 rounded bg-secondary/90 text-foreground font-bold text-lg hover:bg-secondary transition-colors flex items-center justify-center"
-        >+</button>
-        <button
-          onClick={() => setZoom(z => Math.max(0.5, z / 1.3))}
-          className="w-8 h-8 rounded bg-secondary/90 text-foreground font-bold text-lg hover:bg-secondary transition-colors flex items-center justify-center"
-        >−</button>
-        <button
-          onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
-          className="w-8 h-8 rounded bg-secondary/90 text-muted-foreground text-xs hover:bg-secondary transition-colors flex items-center justify-center"
-          title="Reset view"
-        >⟲</button>
+        <button onClick={() => setZoom(z => Math.min(4, z * 1.3))} className="w-8 h-8 rounded bg-secondary/90 text-foreground font-bold text-lg hover:bg-secondary transition-colors flex items-center justify-center">+</button>
+        <button onClick={() => setZoom(z => Math.max(0.5, z / 1.3))} className="w-8 h-8 rounded bg-secondary/90 text-foreground font-bold text-lg hover:bg-secondary transition-colors flex items-center justify-center">−</button>
+        <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} className="w-8 h-8 rounded bg-secondary/90 text-muted-foreground text-xs hover:bg-secondary transition-colors flex items-center justify-center" title="Reset view">⟲</button>
       </div>
       <div className="absolute bottom-2 left-2 z-10 text-xs font-mono-tech text-muted-foreground bg-card/80 px-2 py-1 rounded">
         Zoom: {Math.round(zoom * 100)}%
@@ -152,18 +189,39 @@ const GraphVisualization: React.FC<GraphVisualizationProps> = ({
           <filter id="shadowFilter">
             <feDropShadow dx="1" dy="1" stdDeviation="2" floodColor="black" floodOpacity="0.4" />
           </filter>
-          {/* Road texture */}
+          <filter id="heatmapBlur">
+            <feGaussianBlur stdDeviation="12" />
+          </filter>
           <linearGradient id="roadGrad" x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stopColor="hsl(220, 15%, 22%)" />
             <stop offset="50%" stopColor="hsl(220, 15%, 25%)" />
             <stop offset="100%" stopColor="hsl(220, 15%, 22%)" />
           </linearGradient>
+          {/* Arrow marker for one-way streets */}
+          <marker id="arrowGreen" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="hsl(145, 60%, 50%)" />
+          </marker>
+          <marker id="arrowYellow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="hsl(45, 90%, 50%)" />
+          </marker>
+          <marker id="arrowDefault" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="hsl(210, 40%, 50%)" />
+          </marker>
         </defs>
 
         {/* Background layers */}
         <rect width={SVG_W} height={SVG_H} fill="hsl(220, 35%, 6%)" />
         <rect width={SVG_W} height={SVG_H} fill="url(#fineGrid)" />
         <rect width={SVG_W} height={SVG_H} fill="url(#cityGrid)" />
+
+        {/* Heatmap overlay */}
+        {showHeatmap && heatmapZones.map((zone, i) => (
+          <circle key={`heat-${i}`} cx={zone.cx} cy={zone.cy} r={zone.r} fill={zone.color} filter="url(#heatmapBlur)">
+            {zone.level === 'high' && (
+              <animate attributeName="r" values={`${zone.r};${zone.r + 8};${zone.r}`} dur="2s" repeatCount="indefinite" />
+            )}
+          </circle>
+        ))}
 
         {/* Buildings (background texture) */}
         {buildings.map((b, i) => (
@@ -173,6 +231,7 @@ const GraphVisualization: React.FC<GraphVisualizationProps> = ({
 
         {/* Road surfaces (thick background lines) */}
         {graph.edges.map((edge, i) => {
+          if (edge.blocked) return null;
           const from = graph.nodes.find(n => n.id === edge.from)!;
           const to = graph.nodes.find(n => n.id === edge.to)!;
           return (
@@ -183,13 +242,31 @@ const GraphVisualization: React.FC<GraphVisualizationProps> = ({
           );
         })}
 
+        {/* Blocked road X markers */}
+        {graph.edges.filter(e => e.blocked).map((edge, i) => {
+          const from = graph.nodes.find(n => n.id === edge.from)!;
+          const to = graph.nodes.find(n => n.id === edge.to)!;
+          const mx = (from.x + to.x) / 2;
+          const my = (from.y + to.y) / 2;
+          return (
+            <g key={`blocked-${i}`}>
+              <line x1={from.x} y1={from.y} x2={to.x} y2={to.y}
+                stroke="hsl(0, 60%, 30%)" strokeWidth="4" strokeLinecap="round" opacity="0.4" strokeDasharray="6 4" />
+              <circle cx={mx} cy={my} r="8" fill="hsl(0, 70%, 25%)" stroke="hsl(0, 80%, 50%)" strokeWidth="1.5" />
+              <text x={mx} y={my + 4} fill="hsl(0, 80%, 60%)" fontSize="10" textAnchor="middle" fontWeight="bold">✕</text>
+            </g>
+          );
+        })}
+
         {/* Road center lines and traffic coloring */}
         {graph.edges.map((edge, i) => {
+          if (edge.blocked) return null;
           const from = graph.nodes.find(n => n.id === edge.from)!;
           const to = graph.nodes.find(n => n.id === edge.to)!;
           const key = `${edge.from}-${edge.to}`;
           const isOnPath = pathEdgeSet.has(key);
           const isOnSecondary = secondaryEdgeSet.has(key);
+          const isOnTertiary = tertiaryEdgeSet.has(key);
           const isAnimated = animatedEdges?.has(key);
 
           return (
@@ -197,24 +274,36 @@ const GraphVisualization: React.FC<GraphVisualizationProps> = ({
               {/* Road surface */}
               <line
                 x1={from.x} y1={from.y} x2={to.x} y2={to.y}
-                stroke={isOnPath ? 'hsl(145, 80%, 45%)' : isOnSecondary ? 'hsl(45, 90%, 50%)' : TRAFFIC_ROAD_COLORS[edge.trafficLevel]}
-                strokeWidth={isOnPath ? 6 : isOnSecondary ? 5 : 3}
+                stroke={isOnPath ? 'hsl(145, 80%, 45%)' : isOnSecondary ? 'hsl(45, 90%, 50%)' : isOnTertiary ? 'hsl(210, 80%, 55%)' : TRAFFIC_ROAD_COLORS[edge.trafficLevel]}
+                strokeWidth={isOnPath ? 6 : isOnSecondary ? 5 : isOnTertiary ? 4 : 3}
                 strokeLinecap="round"
-                opacity={isOnPath || isOnSecondary ? 0.9 : 0.5}
+                opacity={isOnPath || isOnSecondary || isOnTertiary ? 0.9 : 0.5}
                 filter={isOnPath ? 'url(#strongGlow)' : undefined}
               />
-              {/* Center dashed line (road marking) */}
+              {/* Center dashed line */}
               <line
                 x1={from.x} y1={from.y} x2={to.x} y2={to.y}
-                stroke={isOnPath ? 'hsl(145, 90%, 70%)' : isOnSecondary ? 'hsl(45, 100%, 70%)' : 'hsl(45, 30%, 40%)'}
+                stroke={isOnPath ? 'hsl(145, 90%, 70%)' : isOnSecondary ? 'hsl(45, 100%, 70%)' : isOnTertiary ? 'hsl(210, 90%, 70%)' : 'hsl(45, 30%, 40%)'}
                 strokeWidth={isOnPath ? 1.5 : 0.5}
                 strokeDasharray={isOnPath ? '8 6' : isAnimated ? '8 4' : '4 8'}
                 strokeLinecap="round"
                 opacity={isOnPath ? 1 : 0.4}
                 className={isAnimated || isOnPath ? 'animate-dash-flow' : undefined}
+                markerEnd={edge.directed ? (isOnPath ? 'url(#arrowGreen)' : isOnSecondary ? 'url(#arrowYellow)' : 'url(#arrowDefault)') : undefined}
               />
+              {/* One-way indicator */}
+              {edge.directed && !isOnPath && !isOnSecondary && (
+                <text
+                  x={(from.x + to.x) / 2 + 5}
+                  y={(from.y + to.y) / 2 - 5}
+                  fill="hsl(210, 60%, 55%)"
+                  fontSize="8"
+                  textAnchor="middle"
+                  opacity="0.6"
+                >→</text>
+              )}
               {/* Traffic indicator dots */}
-              {!isOnPath && !isOnSecondary && (
+              {!isOnPath && !isOnSecondary && !isOnTertiary && (
                 <circle
                   cx={(from.x + to.x) / 2} cy={(from.y + to.y) / 2} r="3"
                   fill={TRAFFIC_COLORS[edge.trafficLevel]}
@@ -321,24 +410,38 @@ const GraphVisualization: React.FC<GraphVisualizationProps> = ({
           );
         })}
 
+        {/* Animated ambulance icon on path */}
+        {ambulanceXY && (
+          <g filter="url(#strongGlow)">
+            <circle cx={ambulanceXY.x} cy={ambulanceXY.y} r="14" fill="hsl(210, 80%, 55%)" stroke="white" strokeWidth="2">
+              <animate attributeName="r" values="12;16;12" dur="1s" repeatCount="indefinite" />
+            </circle>
+            <text x={ambulanceXY.x} y={ambulanceXY.y + 5} fill="white" fontSize="14" textAnchor="middle" fontWeight="bold">🚑</text>
+          </g>
+        )}
+
         {/* Legend */}
         <g transform={`translate(${SVG_W / 2 - SVG_W / (2 * zoom) - pan.x + 10}, ${SVG_H / 2 + SVG_H / (2 * zoom) - pan.y - 35})`}>
-          <rect x="-5" y="-8" width="460" height="30" rx="4" fill="hsl(220, 30%, 10%)" opacity="0.9" stroke="hsl(215, 25%, 20%)" strokeWidth="0.5" />
+          <rect x="-5" y="-8" width="520" height="30" rx="4" fill="hsl(220, 30%, 10%)" opacity="0.9" stroke="hsl(215, 25%, 20%)" strokeWidth="0.5" />
           <circle cx="10" cy="6" r="4" fill="hsl(145, 60%, 45%)" />
-          <text x="20" y="10" fill="hsl(145, 60%, 55%)" fontSize="9" fontFamily="Rajdhani">Optimal</text>
+          <text x="20" y="10" fill="hsl(145, 60%, 55%)" fontSize="9" fontFamily="Rajdhani">Dijkstra</text>
           <line x1="70" y1="6" x2="90" y2="6" stroke="hsl(45, 90%, 50%)" strokeWidth="2" />
-          <text x="95" y="10" fill="hsl(45, 100%, 65%)" fontSize="9" fontFamily="Rajdhani">Alternate</text>
-          <circle cx="155" cy="6" r="3" fill="hsl(145, 60%, 45%)" />
-          <text x="163" y="10" fill="hsl(210, 20%, 60%)" fontSize="9" fontFamily="Rajdhani">Low Traffic</text>
-          <circle cx="225" cy="6" r="3" fill="hsl(45, 100%, 55%)" />
-          <text x="233" y="10" fill="hsl(210, 20%, 60%)" fontSize="9" fontFamily="Rajdhani">Medium</text>
-          <circle cx="280" cy="6" r="3" fill="hsl(0, 80%, 50%)" />
-          <text x="288" y="10" fill="hsl(210, 20%, 60%)" fontSize="9" fontFamily="Rajdhani">High</text>
-          <circle cx="325" cy="6" r="6" fill="hsl(0, 80%, 55%)" />
-          <rect x="321" y="4" width="8" height="3" fill="white" rx="0.5" />
-          <rect x="323" y="1" width="3" height="8" fill="white" rx="0.5" />
-          <text x="336" y="10" fill="hsl(210, 20%, 60%)" fontSize="9" fontFamily="Rajdhani">Hospital</text>
-          <text x="385" y="10" fill="hsl(210, 20%, 60%)" fontSize="9" fontFamily="Rajdhani">🚑 Station</text>
+          <text x="95" y="10" fill="hsl(45, 100%, 65%)" fontSize="9" fontFamily="Rajdhani">Greedy</text>
+          <line x1="140" y1="6" x2="160" y2="6" stroke="hsl(210, 80%, 55%)" strokeWidth="2" />
+          <text x="165" y="10" fill="hsl(210, 80%, 65%)" fontSize="9" fontFamily="Rajdhani">A*</text>
+          <circle cx="195" cy="6" r="3" fill="hsl(145, 60%, 45%)" />
+          <text x="203" y="10" fill="hsl(210, 20%, 60%)" fontSize="9" fontFamily="Rajdhani">Low</text>
+          <circle cx="230" cy="6" r="3" fill="hsl(45, 100%, 55%)" />
+          <text x="238" y="10" fill="hsl(210, 20%, 60%)" fontSize="9" fontFamily="Rajdhani">Med</text>
+          <circle cx="265" cy="6" r="3" fill="hsl(0, 80%, 50%)" />
+          <text x="273" y="10" fill="hsl(210, 20%, 60%)" fontSize="9" fontFamily="Rajdhani">High</text>
+          <text x="308" y="10" fill="hsl(0, 80%, 60%)" fontSize="9" fontFamily="Rajdhani">✕ Closed</text>
+          <text x="360" y="10" fill="hsl(210, 60%, 55%)" fontSize="9" fontFamily="Rajdhani">→ One-way</text>
+          <circle cx="415" cy="6" r="6" fill="hsl(0, 80%, 55%)" />
+          <rect x="411" y="4" width="8" height="3" fill="white" rx="0.5" />
+          <rect x="413" y="1" width="3" height="8" fill="white" rx="0.5" />
+          <text x="426" y="10" fill="hsl(210, 20%, 60%)" fontSize="9" fontFamily="Rajdhani">Hospital</text>
+          <text x="475" y="10" fill="hsl(210, 20%, 60%)" fontSize="9" fontFamily="Rajdhani">🚑 Station</text>
         </g>
       </svg>
     </div>
