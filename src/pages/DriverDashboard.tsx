@@ -3,9 +3,10 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { CityGraph, PathResult } from '@/lib/types';
 import { generateCityGraph, tickTraffic } from '@/lib/graphEngine';
-import { dijkstra, greedyBestFirst } from '@/lib/algorithms';
+import { dijkstra, greedyBestFirst, astar } from '@/lib/algorithms';
 import GraphVisualization from '@/components/GraphVisualization';
 import AlgorithmComparison from '@/components/AlgorithmComparison';
+import LiveEtaCountdown from '@/components/LiveEtaCountdown';
 import { getPriorityInfo } from '@/lib/priorities';
 
 const DriverDashboard: React.FC = () => {
@@ -16,9 +17,11 @@ const DriverDashboard: React.FC = () => {
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
   const [dijkstraResult, setDijkstraResult] = useState<PathResult | null>(null);
   const [greedyResult, setGreedyResult] = useState<PathResult | null>(null);
+  const [astarResult, setAstarResult] = useState<PathResult | null>(null);
   const [routeTarget, setRouteTarget] = useState<'patient' | 'hospital'>('patient');
   const [onTime, setOnTime] = useState<boolean | null>(null);
-  const routeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [ambulanceAnim, setAmbulanceAnim] = useState<{ nodeIndex: number; progress: number } | null>(null);
+  const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Dynamic traffic
   useEffect(() => {
@@ -28,7 +31,27 @@ const DriverDashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Recalculate route when traffic changes (dynamic rerouting)
+  // Start ambulance animation
+  const startAnimation = useCallback((path: string[]) => {
+    if (animRef.current) clearInterval(animRef.current);
+    if (path.length < 2) return;
+    setAmbulanceAnim({ nodeIndex: 0, progress: 0 });
+    animRef.current = setInterval(() => {
+      setAmbulanceAnim(prev => {
+        if (!prev) return null;
+        let { nodeIndex, progress } = prev;
+        progress += 0.015;
+        if (progress >= 1) { nodeIndex++; progress = 0; }
+        if (nodeIndex >= path.length - 1) {
+          if (animRef.current) clearInterval(animRef.current);
+          return null;
+        }
+        return { nodeIndex, progress };
+      });
+    }, 50);
+  }, []);
+
+  // Recalculate route when traffic changes
   useEffect(() => {
     if (!activeCaseId || !myAmbulance) return;
     const activeCase = assignedCases.find(c => c.emergency_id === activeCaseId);
@@ -41,16 +64,22 @@ const DriverDashboard: React.FC = () => {
 
     const dResult = dijkstra(graph, start, end);
     const gResult = greedyBestFirst(graph, start, end);
+    const aResult = astar(graph, start, end);
     setDijkstraResult(dResult);
     setGreedyResult(gResult);
+    setAstarResult(aResult);
 
-    // Check if on time
+    // Start animation on best path
+    const bestPath = [dResult, gResult, aResult].reduce((a, b) => a.totalCost <= b.totalCost ? a : b);
+    if (bestPath.path.length >= 2 && !ambulanceAnim) {
+      startAnimation(bestPath.path);
+    }
+
     const priority = getPriorityInfo(activeCase.emergency.case_type);
     const etaMinutes = dResult.totalCost / 60;
     setOnTime(etaMinutes <= priority.responseTimeMax);
   }, [graph, activeCaseId, myAmbulance, routeTarget, assignedCases]);
 
-  // Find nearest hospital node
   function findNearestHospital(g: CityGraph, fromNode: string): string {
     const hospitals = g.nodes.filter(n => n.type === 'hospital');
     if (hospitals.length === 0) return fromNode;
@@ -79,38 +108,26 @@ const DriverDashboard: React.FC = () => {
         return;
       }
 
-      const statusRank: Record<string, number> = {
-        'en-route': 0,
-        assigned: 1,
-        available: 2,
-        completed: 3,
-      };
-
-      const primaryAmbulance = [...ambulances].sort(
-        (a, b) => (statusRank[a.status] ?? 99) - (statusRank[b.status] ?? 99)
-      )[0];
-
+      const statusRank: Record<string, number> = { 'en-route': 0, assigned: 1, available: 2, completed: 3 };
+      const primaryAmbulance = [...ambulances].sort((a, b) => (statusRank[a.status] ?? 99) - (statusRank[b.status] ?? 99))[0];
       setMyAmbulance(primaryAmbulance);
 
-      const ambulanceIds = ambulances.map((a) => a.id);
+      const ambulanceIds = ambulances.map(a => a.id);
       const { data: assignments } = await supabase
         .from('emergency_assignments')
         .select('*, emergency:emergencies(*)')
         .in('ambulance_id', ambulanceIds)
         .order('assigned_at', { ascending: false })
         .limit(20);
-
       if (assignments) setAssignedCases(assignments as any[]);
     };
     fetchData();
 
-    // Realtime
     const channel = supabase
       .channel('driver-assignments')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'emergency_assignments' }, () => fetchData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'emergencies' }, () => fetchData())
       .subscribe();
-
     return () => { supabase.removeChannel(channel); };
   }, [user]);
 
@@ -137,6 +154,8 @@ const DriverDashboard: React.FC = () => {
 
   const handleReachedPatient = () => {
     setRouteTarget('hospital');
+    setAmbulanceAnim(null);
+    if (animRef.current) clearInterval(animRef.current);
   };
 
   const handleResolved = async () => {
@@ -148,7 +167,10 @@ const DriverDashboard: React.FC = () => {
     setActiveCaseId(null);
     setDijkstraResult(null);
     setGreedyResult(null);
+    setAstarResult(null);
     setOnTime(null);
+    setAmbulanceAnim(null);
+    if (animRef.current) clearInterval(animRef.current);
   };
 
   const pendingCases = assignedCases.filter(c => c.action === 'pending');
@@ -192,20 +214,17 @@ const DriverDashboard: React.FC = () => {
               </div>
             </div>
 
+            {/* Live ETA Countdown */}
+            {activeCaseId && dijkstraResult && (
+              <LiveEtaCountdown totalCostSeconds={dijkstraResult.totalCost} label={routeTarget === 'patient' ? '→ TO PATIENT' : '→ TO HOSPITAL'} />
+            )}
+
             {/* On-time indicator */}
             {activeCaseId && onTime !== null && (
               <div className={`panel-gradient border rounded-lg p-4 ${onTime ? 'border-accent glow-green' : 'border-primary glow-red'}`}>
-                <h3 className="font-orbitron text-sm text-foreground mb-1">
-                  {routeTarget === 'patient' ? '→ TO PATIENT' : '→ TO HOSPITAL'}
-                </h3>
                 <p className={`font-orbitron text-lg font-bold ${onTime ? 'text-accent' : 'text-primary animate-pulse-emergency'}`}>
                   {onTime ? '✅ ON TIME' : '⚠️ RUNNING LATE'}
                 </p>
-                {dijkstraResult && (
-                  <p className="text-xs font-mono-tech text-muted-foreground mt-1">
-                    ETA: {Math.floor(dijkstraResult.totalCost / 60)}m {dijkstraResult.totalCost % 60}s
-                  </p>
-                )}
                 {routeTarget === 'patient' && (
                   <button onClick={handleReachedPatient} className="w-full mt-2 bg-accent text-accent-foreground font-orbitron text-xs py-2 rounded font-bold">
                     ✅ REACHED PATIENT → NAVIGATE TO HOSPITAL
@@ -259,7 +278,7 @@ const DriverDashboard: React.FC = () => {
             </div>
 
             {/* Algorithm comparison */}
-            {dijkstraResult && <AlgorithmComparison dijkstra={dijkstraResult} greedy={greedyResult} />}
+            {dijkstraResult && <AlgorithmComparison dijkstra={dijkstraResult} greedy={greedyResult} astar={astarResult} />}
           </div>
 
           {/* Center: Map */}
@@ -268,13 +287,14 @@ const DriverDashboard: React.FC = () => {
               <div className="flex items-center justify-between px-2 mb-1">
                 <div className="flex items-center gap-2">
                   <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />
-                  <span className="text-xs font-orbitron text-accent">LIVE TRAFFIC</span>
-                  <span className="text-xs text-muted-foreground font-mono-tech">Route recalculates every 3s</span>
+                  <span className="text-xs font-orbitron text-accent">LIVE TRAFFIC + HEATMAP</span>
+                  <span className="text-xs text-muted-foreground font-mono-tech">Reroutes every 3s</span>
                 </div>
                 {dijkstraResult && (
                   <div className="text-xs font-mono-tech text-muted-foreground">
-                    Dijkstra: <span className="text-emergency-blue font-bold">{dijkstraResult.totalCost}s</span>
-                    {greedyResult && <> | Greedy: <span className="text-emergency-yellow font-bold">{greedyResult.totalCost}s</span></>}
+                    D: <span className="text-emergency-green font-bold">{dijkstraResult.totalCost}s</span>
+                    {greedyResult && <> | G: <span className="text-emergency-yellow font-bold">{greedyResult.totalCost}s</span></>}
+                    {astarResult && <> | A*: <span className="text-emergency-blue font-bold">{astarResult.totalCost}s</span></>}
                   </div>
                 )}
               </div>
@@ -284,7 +304,10 @@ const DriverDashboard: React.FC = () => {
                 selectedEnd={activeCase?.emergency?.patient_node ?? null}
                 pathResult={dijkstraResult}
                 secondaryPath={greedyResult}
+                tertiaryPath={astarResult}
                 onNodeClick={() => {}}
+                ambulancePosition={ambulanceAnim}
+                showHeatmap={true}
               />
             </div>
           </div>

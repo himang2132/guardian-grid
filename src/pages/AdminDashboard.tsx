@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
-import { CityGraph } from '@/lib/types';
+import { CityGraph, AnalyticsEntry } from '@/lib/types';
 import { generateCityGraph, tickTraffic } from '@/lib/graphEngine';
-import { dijkstra } from '@/lib/algorithms';
+import { dijkstra, greedyBestFirst, astar } from '@/lib/algorithms';
 import GraphVisualization from '@/components/GraphVisualization';
 import StatsBar from '@/components/StatsBar';
+import AnalyticsDashboard from '@/components/AnalyticsDashboard';
 import { getPriorityInfo } from '@/lib/priorities';
+
+const ESCALATION_TIMEOUT = 20000; // 20s before auto-dispatch
 
 const AdminDashboard: React.FC = () => {
   const { user, signOut } = useAuth();
@@ -16,7 +19,8 @@ const AdminDashboard: React.FC = () => {
   const [assignments, setAssignments] = useState<any[]>([]);
   const [profiles, setProfiles] = useState<any[]>([]);
   const [roles, setRoles] = useState<any[]>([]);
-  const [tab, setTab] = useState<'overview' | 'ambulances' | 'cases' | 'drivers'>('overview');
+  const [tab, setTab] = useState<'overview' | 'ambulances' | 'cases' | 'drivers' | 'analytics'>('overview');
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsEntry[]>([]);
 
   // Dynamic traffic
   useEffect(() => {
@@ -50,7 +54,21 @@ const AdminDashboard: React.FC = () => {
     return () => { supabase.removeChannel(channel); };
   }, [fetchAll]);
 
-  // Auto-dispatch pending emergencies to nearest available ambulance
+  // Auto-escalation: check for old pending emergencies and auto-dispatch
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const pendingOld = emergencies.filter(e => 
+        e.status === 'pending' && (now - new Date(e.created_at).getTime() > ESCALATION_TIMEOUT)
+      );
+      for (const e of pendingOld) {
+        handleDispatch(e.id);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [emergencies, ambulances, graph]);
+
+  // Multi-ambulance dispatch optimization
   const handleDispatch = async (emergencyId: string) => {
     const emergency = emergencies.find(e => e.id === emergencyId);
     if (!emergency) return;
@@ -58,35 +76,66 @@ const AdminDashboard: React.FC = () => {
     const available = ambulances.filter(a => a.status === 'available');
     if (available.length === 0) return;
 
-    // Find nearest ambulance
+    // Find optimal ambulance using all three algorithms
     let bestAmb = available[0];
     let bestCost = Infinity;
+
     for (const amb of available) {
-      const result = dijkstra(graph, amb.current_node, emergency.patient_node);
-      if (result.totalCost < bestCost) {
-        bestCost = result.totalCost;
+      const dResult = dijkstra(graph, amb.current_node, emergency.patient_node);
+      const gResult = greedyBestFirst(graph, amb.current_node, emergency.patient_node);
+      const aResult = astar(graph, amb.current_node, emergency.patient_node);
+      const minCost = Math.min(dResult.totalCost, gResult.totalCost, aResult.totalCost);
+      if (minCost < bestCost) {
+        bestCost = minCost;
         bestAmb = amb;
       }
     }
 
-    await supabase.from('emergency_assignments').insert({
+    // Compute all 3 results for the chosen ambulance
+    const dResult = dijkstra(graph, bestAmb.current_node, emergency.patient_node);
+    const gResult = greedyBestFirst(graph, bestAmb.current_node, emergency.patient_node);
+    const aResult = astar(graph, bestAmb.current_node, emergency.patient_node);
+    const costs = [
+      { algo: 'dijkstra' as const, cost: dResult.totalCost },
+      { algo: 'greedy' as const, cost: gResult.totalCost },
+      { algo: 'astar' as const, cost: aResult.totalCost },
+    ];
+    const winner = costs.reduce((a, b) => a.cost <= b.cost ? a : b);
+    const pInfo = getPriorityInfo(emergency.case_type);
+    const onTime = bestCost / 60 <= pInfo.responseTimeMax;
+
+    // Record analytics
+    setAnalyticsData(prev => [...prev, {
+      timestamp: Date.now(),
+      emergencyId: emergency.id,
+      caseType: emergency.case_type,
+      dijkstraCost: dResult.totalCost,
+      greedyCost: gResult.totalCost,
+      astarCost: aResult.totalCost,
+      dijkstraDistance: dResult.totalDistance,
+      greedyDistance: gResult.totalDistance,
+      astarDistance: aResult.totalDistance,
+      winner: winner.algo,
+      responseTimeSec: bestCost,
+      onTime,
+    }]);
+
+    await supabase.from('emergency_assignments').insert([{
       emergency_id: emergencyId,
       ambulance_id: bestAmb.id,
       action: 'pending',
-    });
+      route_data: { dijkstra: dResult, greedy: gResult, astar: aResult, winner: winner.algo } as any,
+    }]);
     await supabase.from('emergencies').update({ status: 'assigned' }).eq('id', emergencyId);
     await supabase.from('ambulances').update({ status: 'en-route' }).eq('id', bestAmb.id);
   };
 
-  // Assign driver to ambulance
   const handleAssignDriver = async (ambulanceId: string, driverId: string) => {
     await supabase.from('ambulances').update({ driver_id: driverId }).eq('id', ambulanceId);
     fetchAll();
   };
 
-  // Change user role
   const handleChangeRole = async (userId: string, newRole: string) => {
-    // Delete old role and insert new
     await supabase.from('user_roles').delete().eq('user_id', userId);
     await supabase.from('user_roles').insert({ user_id: userId, role: newRole as any });
     fetchAll();
@@ -95,7 +144,9 @@ const AdminDashboard: React.FC = () => {
   const totalEmergencies = emergencies.length;
   const activeAmbulances = ambulances.filter(a => a.status !== 'available').length;
   const resolvedCases = emergencies.filter(e => e.status === 'resolved').length;
-  const avgResponseTime = 0; // Would calculate from actual data
+  const avgResponseTime = analyticsData.length > 0
+    ? Math.round(analyticsData.reduce((s, e) => s + e.responseTimeSec, 0) / analyticsData.length)
+    : 0;
 
   const pendingEmergencies = emergencies.filter(e => e.status === 'pending');
   const drivers = roles.filter(r => r.role === 'driver');
@@ -125,8 +176,8 @@ const AdminDashboard: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="px-6 flex gap-2 mb-4">
-        {(['overview', 'ambulances', 'cases', 'drivers'] as const).map(t => (
+      <div className="px-6 flex gap-2 mb-4 flex-wrap">
+        {(['overview', 'ambulances', 'cases', 'drivers', 'analytics'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -134,7 +185,7 @@ const AdminDashboard: React.FC = () => {
               tab === t ? 'red-bar text-primary-foreground' : 'bg-secondary text-muted-foreground hover:bg-secondary/80'
             }`}
           >
-            {t.toUpperCase()}
+            {t === 'analytics' ? '📊 ' : ''}{t.toUpperCase()}
           </button>
         ))}
       </div>
@@ -147,17 +198,19 @@ const AdminDashboard: React.FC = () => {
               <h3 className="font-orbitron text-sm text-foreground mb-3">
                 🚨 PENDING DISPATCH ({pendingEmergencies.length})
               </h3>
+              <p className="text-xs text-muted-foreground mb-3">Auto-escalation: unaccepted cases auto-dispatch after 20s</p>
               <div className="space-y-2 max-h-96 overflow-y-auto">
                 {pendingEmergencies.map(e => {
                   const pInfo = getPriorityInfo(e.case_type);
+                  const age = Date.now() - new Date(e.created_at).getTime();
+                  const isOverdue = age > ESCALATION_TIMEOUT;
                   return (
-                    <div key={e.id} className="bg-secondary/30 rounded p-3 border border-border">
+                    <div key={e.id} className={`bg-secondary/30 rounded p-3 border ${isOverdue ? 'border-primary animate-pulse-emergency' : 'border-border'}`}>
                       <div className="flex justify-between items-start">
                         <div>
                           <span className="font-orbitron text-xs font-bold text-foreground">{e.case_type}</span>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {e.patient_name} • Node: {e.patient_node}
-                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">{e.patient_name} • Node: {e.patient_node}</p>
+                          {isOverdue && <p className="text-xs text-primary font-orbitron mt-1">⚠️ ESCALATED — AUTO-DISPATCHING</p>}
                         </div>
                         <span className="text-xs font-mono-tech" style={{ color: pInfo.color }}>P{pInfo.priority}</span>
                       </div>
@@ -183,6 +236,7 @@ const AdminDashboard: React.FC = () => {
                 pathResult={null}
                 secondaryPath={null}
                 onNodeClick={() => {}}
+                showHeatmap={true}
               />
             </div>
           </div>
@@ -319,6 +373,10 @@ const AdminDashboard: React.FC = () => {
               </table>
             </div>
           </div>
+        )}
+
+        {tab === 'analytics' && (
+          <AnalyticsDashboard entries={analyticsData} />
         )}
       </div>
     </div>

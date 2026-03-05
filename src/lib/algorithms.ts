@@ -166,3 +166,72 @@ export function greedyBestFirst(graph: CityGraph, start: string, end: string): P
     visitedOrder,
   };
 }
+
+// A* Search — combines Dijkstra's optimality with heuristic guidance
+export function astar(graph: CityGraph, start: string, end: string): PathResult {
+  const t0 = performance.now();
+  const adj = buildAdjacencyList(graph);
+  const endNode = graph.nodes.find(n => n.id === end)!;
+
+  // Heuristic: Euclidean pixel distance scaled to approximate weight
+  const heuristic = (nodeId: string) => {
+    const node = graph.nodes.find(n => n.id === nodeId)!;
+    const pixelDist = Math.sqrt((node.x - endNode.x) ** 2 + (node.y - endNode.y) ** 2);
+    return pixelDist / 30 * 10 * 60 * 0.8; // conservative estimate to stay admissible
+  };
+
+  const gScore = new Map<string, number>();
+  const prev = new Map<string, string | null>();
+  const distKm = new Map<string, number>();
+  const visited = new Set<string>();
+  const visitedOrder: string[] = [];
+
+  for (const node of graph.nodes) {
+    gScore.set(node.id, Infinity);
+    distKm.set(node.id, 0);
+    prev.set(node.id, null);
+  }
+  gScore.set(start, 0);
+
+  const pq = new MinHeap();
+  pq.push(start, heuristic(start));
+
+  while (pq.size > 0) {
+    const { node: u } = pq.pop()!;
+    if (visited.has(u)) continue;
+    visited.add(u);
+    visitedOrder.push(u);
+
+    if (u === end) break;
+
+    for (const { neighbor, weight, distance } of adj.get(u) || []) {
+      if (visited.has(neighbor)) continue;
+      const tentativeG = gScore.get(u)! + weight;
+      if (tentativeG < gScore.get(neighbor)!) {
+        gScore.set(neighbor, tentativeG);
+        distKm.set(neighbor, distKm.get(u)! + distance);
+        prev.set(neighbor, u);
+        pq.push(neighbor, tentativeG + heuristic(neighbor));
+      }
+    }
+  }
+
+  const path: string[] = [];
+  let current: string | null = end;
+  while (current) {
+    path.unshift(current);
+    current = prev.get(current) || null;
+  }
+
+  const executionTime = performance.now() - t0;
+
+  return {
+    path: path[0] === start ? path : [],
+    totalCost: gScore.get(end) ?? Infinity,
+    totalDistance: Math.round((distKm.get(end) ?? 0) * 10) / 10,
+    nodesVisited: visited.size,
+    executionTime: Math.round(executionTime * 100) / 100,
+    algorithm: 'astar',
+    visitedOrder,
+  };
+}

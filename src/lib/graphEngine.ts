@@ -78,6 +78,20 @@ export function generateCityGraph(): CityGraph {
     }
   }
 
+  // Add some one-way streets (~15% of edges)
+  for (const edge of edges) {
+    if (Math.random() < 0.15) {
+      edge.directed = true;
+    }
+  }
+
+  // Add a couple of road closures
+  const closureCount = Math.floor(edges.length * 0.03);
+  for (let i = 0; i < closureCount; i++) {
+    const idx = Math.floor(Math.random() * edges.length);
+    edges[idx].blocked = true;
+  }
+
   return { nodes, edges };
 }
 
@@ -95,6 +109,7 @@ function addEdge(edges: GraphEdge[], nodes: GraphNode[], from: string, to: strin
 }
 
 export function getEffectiveWeight(edge: GraphEdge): number {
+  if (edge.blocked) return Infinity;
   return Math.round(edge.baseWeight * TRAFFIC_MULTIPLIERS[edge.trafficLevel]);
 }
 
@@ -102,9 +117,14 @@ export function buildAdjacencyList(graph: CityGraph): Map<string, { neighbor: st
   const adj = new Map<string, { neighbor: string; weight: number; distance: number }[]>();
   for (const node of graph.nodes) adj.set(node.id, []);
   for (const edge of graph.edges) {
+    if (edge.blocked) continue; // skip closed roads
     const w = getEffectiveWeight(edge);
+    // from→to always valid
     adj.get(edge.from)!.push({ neighbor: edge.to, weight: w, distance: edge.distance });
-    adj.get(edge.to)!.push({ neighbor: edge.from, weight: w, distance: edge.distance });
+    // to→from only if not one-way
+    if (!edge.directed) {
+      adj.get(edge.to)!.push({ neighbor: edge.from, weight: w, distance: edge.distance });
+    }
   }
   return adj;
 }
@@ -131,11 +151,36 @@ export function tickTraffic(graph: CityGraph, changeRate: number = 0.15): CityGr
     ...graph,
     edges: graph.edges.map(e => {
       if (Math.random() < changeRate) {
-        // Bias towards adjacent traffic level for realism
         const idx = levels.indexOf(e.trafficLevel);
         const shift = Math.random() < 0.5 ? -1 : 1;
         const newIdx = Math.max(0, Math.min(2, idx + shift));
         return { ...e, trafficLevel: levels[newIdx] };
+      }
+      return e;
+    }),
+  };
+}
+
+/** Toggle road closure on a specific edge */
+export function toggleRoadClosure(graph: CityGraph, from: string, to: string): CityGraph {
+  return {
+    ...graph,
+    edges: graph.edges.map(e => {
+      if ((e.from === from && e.to === to) || (e.from === to && e.to === from)) {
+        return { ...e, blocked: !e.blocked };
+      }
+      return e;
+    }),
+  };
+}
+
+/** Toggle one-way direction on a specific edge */
+export function toggleOneWay(graph: CityGraph, from: string, to: string): CityGraph {
+  return {
+    ...graph,
+    edges: graph.edges.map(e => {
+      if ((e.from === from && e.to === to) || (e.from === to && e.to === from)) {
+        return { ...e, directed: !e.directed };
       }
       return e;
     }),
