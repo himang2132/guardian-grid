@@ -39,7 +39,7 @@ const NODE_COLORS: Record<string, string> = {
   station: 'hsl(145, 60%, 45%)',
 };
 
-const SVG_W = 1050;
+const SVG_W = 1100;
 const SVG_H = 620;
 
 const GraphVisualization: React.FC<GraphVisualizationProps> = ({

@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { CityGraph, TrafficLevel, PathResult, Ambulance, Emergency, AnalyticsEntry } from '@/lib/types';
-import { generateCityGraph, updateTrafficLevels, randomizeTraffic, tickTraffic } from '@/lib/graphEngine';
+import { updateTrafficLevels, randomizeTraffic, tickTraffic } from '@/lib/graphEngine';
+import { BASE_CITY_GRAPH } from '@/lib/sharedGraph';
 import { dijkstra, greedyBestFirst, astar } from '@/lib/algorithms';
 import { getPriorityInfo } from '@/lib/priorities';
 import GraphVisualization from '@/components/GraphVisualization';
@@ -17,15 +18,15 @@ const NAMES = ['Rohit Kumar', 'Priya Sharma', 'Anil Verma', 'Meena Patel', 'Sure
 
 const INITIAL_AMBULANCES: Ambulance[] = [
   { id: 'AMB-101', name: 'Ambulance 101', currentNode: 'N0', state: 'available' },
-  { id: 'AMB-102', name: 'Ambulance 102', currentNode: 'N15', state: 'available' },
-  { id: 'AMB-103', name: 'Ambulance 103', currentNode: 'N10', state: 'available' },
-  { id: 'AMB-104', name: 'Ambulance 104', currentNode: 'N25', state: 'available' },
+  { id: 'AMB-102', name: 'Ambulance 102', currentNode: 'N20', state: 'available' },
+  { id: 'AMB-103', name: 'Ambulance 103', currentNode: 'N35', state: 'available' },
+  { id: 'AMB-104', name: 'Ambulance 104', currentNode: 'N48', state: 'available' },
 ];
 
 const ESCALATION_TIMEOUT_MS = 15000; // 15s before escalation
 
 const Index: React.FC = () => {
-  const [graph, setGraph] = useState<CityGraph>(() => generateCityGraph());
+  const [graph, setGraph] = useState<CityGraph>(() => ({ ...BASE_CITY_GRAPH, edges: BASE_CITY_GRAPH.edges.map(e => ({ ...e })) }));
   const [trafficLevel, setTrafficLevel] = useState<TrafficLevel>('medium');
   const [selectedStart, setSelectedStart] = useState<string | null>(null);
   const [selectedEnd, setSelectedEnd] = useState<string | null>(null);
@@ -266,7 +267,7 @@ const Index: React.FC = () => {
   const handleRegenerate = useCallback(() => {
     if (animRef.current) clearInterval(animRef.current);
     if (escalationRef.current) clearTimeout(escalationRef.current);
-    setGraph(generateCityGraph());
+    setGraph({ ...BASE_CITY_GRAPH, edges: BASE_CITY_GRAPH.edges.map(e => ({ ...e })) });
     setSelectedStart(null);
     setSelectedEnd(null);
     setDijkstraResult(null);

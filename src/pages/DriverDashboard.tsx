@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { CityGraph, PathResult } from '@/lib/types';
-import { generateCityGraph, tickTraffic } from '@/lib/graphEngine';
+import { tickTraffic } from '@/lib/graphEngine';
+import { BASE_CITY_GRAPH } from '@/lib/sharedGraph';
 import { dijkstra, greedyBestFirst, astar } from '@/lib/algorithms';
 import GraphVisualization from '@/components/GraphVisualization';
 import AlgorithmComparison from '@/components/AlgorithmComparison';
@@ -11,7 +12,7 @@ import { getPriorityInfo } from '@/lib/priorities';
 
 const DriverDashboard: React.FC = () => {
   const { user, signOut } = useAuth();
-  const [graph, setGraph] = useState<CityGraph>(() => generateCityGraph());
+  const [graph, setGraph] = useState<CityGraph>(() => ({ ...BASE_CITY_GRAPH, edges: BASE_CITY_GRAPH.edges.map(e => ({ ...e })) }));
   const [myAmbulance, setMyAmbulance] = useState<any>(null);
   const [assignedCases, setAssignedCases] = useState<any[]>([]);
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
