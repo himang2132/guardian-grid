@@ -6,17 +6,31 @@ const TRAFFIC_MULTIPLIERS: Record<TrafficLevel, number> = {
   high: 2.5,
 };
 
-// Generate a city-like graph with ~40 nodes
-export function generateCityGraph(): CityGraph {
+// Seeded PRNG for deterministic graph generation
+function createSeededRNG(seed: number) {
+  let s = seed;
+  return () => {
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    return (s >>> 0) / 0xffffffff;
+  };
+}
+
+// Generate a complex city-like graph with ~70+ nodes (deterministic via seed)
+export function generateCityGraph(seed: number = 42): CityGraph {
+  const rng = createSeededRNG(seed);
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
 
-  const cols = 8;
-  const rows = 5;
-  const spacingX = 120;
-  const spacingY = 110;
-  const offsetX = 80;
-  const offsetY = 60;
+  const cols = 10;
+  const rows = 7;
+  const spacingX = 100;
+  const spacingY = 80;
+  const offsetX = 60;
+  const offsetY = 40;
+
+  // Hospital and station positions (deterministic)
+  const hospitalIndices = new Set([5, 14, 28, 42, 55, 63]);
+  const stationIndices = new Set([0, 20, 35, 48, 69]);
 
   let nodeIndex = 0;
   const grid: (string | null)[][] = [];
@@ -24,17 +38,19 @@ export function generateCityGraph(): CityGraph {
   for (let r = 0; r < rows; r++) {
     grid[r] = [];
     for (let c = 0; c < cols; c++) {
-      if (Math.random() < 0.1 && nodeIndex > 3) {
+      // Skip ~8% of interior nodes for organic feel
+      if (rng() < 0.08 && nodeIndex > 3 && !hospitalIndices.has(nodeIndex) && !stationIndices.has(nodeIndex)) {
         grid[r][c] = null;
+        nodeIndex++;
         continue;
       }
       const id = `N${nodeIndex}`;
-      const jitterX = (Math.random() - 0.5) * 40;
-      const jitterY = (Math.random() - 0.5) * 30;
+      const jitterX = (rng() - 0.5) * 35;
+      const jitterY = (rng() - 0.5) * 25;
 
       let type: GraphNode['type'] = 'junction';
-      if (nodeIndex === 0 || nodeIndex === 15) type = 'station';
-      if (nodeIndex === 7 || nodeIndex === 30 || nodeIndex === 20) type = 'hospital';
+      if (hospitalIndices.has(nodeIndex)) type = 'hospital';
+      else if (stationIndices.has(nodeIndex)) type = 'station';
 
       nodes.push({
         id,
@@ -49,53 +65,60 @@ export function generateCityGraph(): CityGraph {
     }
   }
 
-  // Connect adjacent nodes in grid
+  // Connect adjacent nodes in grid (horizontal + vertical + diagonals)
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const current = grid[r][c];
       if (!current) continue;
+      // Right
       if (c + 1 < cols && grid[r][c + 1]) {
-        addEdge(edges, nodes, current, grid[r][c + 1]!);
+        addEdge(edges, nodes, current, grid[r][c + 1]!, rng);
       }
+      // Down
       if (r + 1 < rows && grid[r + 1]?.[c]) {
-        addEdge(edges, nodes, current, grid[r + 1][c]!);
+        addEdge(edges, nodes, current, grid[r + 1][c]!, rng);
       }
-      if (Math.random() < 0.3 && r + 1 < rows && c + 1 < cols && grid[r + 1]?.[c + 1]) {
-        addEdge(edges, nodes, current, grid[r + 1][c + 1]!);
+      // Diagonal down-right (~35%)
+      if (rng() < 0.35 && r + 1 < rows && c + 1 < cols && grid[r + 1]?.[c + 1]) {
+        addEdge(edges, nodes, current, grid[r + 1][c + 1]!, rng);
+      }
+      // Diagonal down-left (~20%)
+      if (rng() < 0.20 && r + 1 < rows && c - 1 >= 0 && grid[r + 1]?.[c - 1]) {
+        addEdge(edges, nodes, current, grid[r + 1][c - 1]!, rng);
       }
     }
   }
 
-  // Extra cross-connections
-  for (let i = 0; i < 5; i++) {
-    const a = nodes[Math.floor(Math.random() * nodes.length)];
-    const b = nodes[Math.floor(Math.random() * nodes.length)];
+  // Extra cross-connections for complexity (~12 extra edges)
+  for (let i = 0; i < 12; i++) {
+    const a = nodes[Math.floor(rng() * nodes.length)];
+    const b = nodes[Math.floor(rng() * nodes.length)];
     if (a.id !== b.id && !edges.find(e => (e.from === a.id && e.to === b.id) || (e.from === b.id && e.to === a.id))) {
       const dist = Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
-      if (dist < 300) {
-        addEdge(edges, nodes, a.id, b.id);
+      if (dist < 280) {
+        addEdge(edges, nodes, a.id, b.id, rng);
       }
     }
   }
 
-  // Add some one-way streets (~15% of edges)
+  // Add some one-way streets (~12% of edges)
   for (const edge of edges) {
-    if (Math.random() < 0.15) {
+    if (rng() < 0.12) {
       edge.directed = true;
     }
   }
 
-  // Add a couple of road closures
-  const closureCount = Math.floor(edges.length * 0.03);
+  // Add road closures (~3%)
+  const closureCount = Math.max(2, Math.floor(edges.length * 0.03));
   for (let i = 0; i < closureCount; i++) {
-    const idx = Math.floor(Math.random() * edges.length);
+    const idx = Math.floor(rng() * edges.length);
     edges[idx].blocked = true;
   }
 
   return { nodes, edges };
 }
 
-function addEdge(edges: GraphEdge[], nodes: GraphNode[], from: string, to: string) {
+function addEdge(edges: GraphEdge[], nodes: GraphNode[], from: string, to: string, rng: () => number = Math.random) {
   const nodeA = nodes.find(n => n.id === from)!;
   const nodeB = nodes.find(n => n.id === to)!;
   const pixelDist = Math.sqrt((nodeA.x - nodeB.x) ** 2 + (nodeA.y - nodeB.y) ** 2);
@@ -103,7 +126,7 @@ function addEdge(edges: GraphEdge[], nodes: GraphNode[], from: string, to: strin
   const baseWeight = Math.round(distance * 60);
 
   const trafficLevels: TrafficLevel[] = ['low', 'medium', 'high'];
-  const traffic = trafficLevels[Math.floor(Math.random() * 3)];
+  const traffic = trafficLevels[Math.floor(rng() * 3)];
 
   edges.push({ from, to, baseWeight, distance, trafficLevel: traffic });
 }
