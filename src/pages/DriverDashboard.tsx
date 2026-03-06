@@ -164,10 +164,16 @@ const DriverDashboard: React.FC = () => {
     await supabase.from('emergency_assignments').update({ action: 'passed', responded_at: new Date().toISOString() }).eq('id', assignmentId);
   };
 
-  const handleReachedPatient = () => {
+  const handleReachedPatient = async () => {
+    // Update ambulance location to patient's node
+    const activeEmergency = assignedCases.find(c => c.emergency_id === activeCaseId)?.emergency;
+    if (myAmbulance && activeEmergency) {
+      await supabase.from('ambulances').update({ current_node: activeEmergency.patient_node }).eq('id', myAmbulance.id);
+      setMyAmbulance((prev: any) => prev ? { ...prev, current_node: activeEmergency.patient_node } : prev);
+    }
     setRouteTarget('hospital');
     setAmbulanceAnim(null);
-    animStartedRef.current = false; // allow animation to start for hospital phase
+    animStartedRef.current = false;
     if (animRef.current) clearInterval(animRef.current);
   };
 
