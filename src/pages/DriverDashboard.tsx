@@ -19,9 +19,11 @@ const DriverDashboard: React.FC = () => {
   const [greedyResult, setGreedyResult] = useState<PathResult | null>(null);
   const [astarResult, setAstarResult] = useState<PathResult | null>(null);
   const [routeTarget, setRouteTarget] = useState<'patient' | 'hospital'>('patient');
+  const [fixedHospital, setFixedHospital] = useState<string | null>(null);
   const [onTime, setOnTime] = useState<boolean | null>(null);
   const [ambulanceAnim, setAmbulanceAnim] = useState<{ nodeIndex: number; progress: number } | null>(null);
   const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const animStartedRef = useRef<boolean>(false);
 
   // Dynamic traffic
   useEffect(() => {
@@ -51,7 +53,7 @@ const DriverDashboard: React.FC = () => {
     }, 50);
   }, []);
 
-  // Recalculate route when traffic changes
+  // Recalculate route when traffic changes (but keep hospital fixed)
   useEffect(() => {
     if (!activeCaseId || !myAmbulance) return;
     const activeCase = assignedCases.find(c => c.emergency_id === activeCaseId);
@@ -60,7 +62,7 @@ const DriverDashboard: React.FC = () => {
     const start = myAmbulance.current_node;
     const end = routeTarget === 'patient'
       ? activeCase.emergency.patient_node
-      : findNearestHospital(graph, activeCase.emergency.patient_node);
+      : fixedHospital ?? activeCase.emergency.patient_node;
 
     const dResult = dijkstra(graph, start, end);
     const gResult = greedyBestFirst(graph, start, end);
@@ -69,16 +71,19 @@ const DriverDashboard: React.FC = () => {
     setGreedyResult(gResult);
     setAstarResult(aResult);
 
-    // Start animation on best path
-    const bestPath = [dResult, gResult, aResult].reduce((a, b) => a.totalCost <= b.totalCost ? a : b);
-    if (bestPath.path.length >= 2 && !ambulanceAnim) {
-      startAnimation(bestPath.path);
+    // Start animation only ONCE per phase (patient or hospital)
+    if (!animStartedRef.current) {
+      const bestPath = [dResult, gResult, aResult].reduce((a, b) => a.totalCost <= b.totalCost ? a : b);
+      if (bestPath.path.length >= 2) {
+        startAnimation(bestPath.path);
+        animStartedRef.current = true;
+      }
     }
 
     const priority = getPriorityInfo(activeCase.emergency.case_type);
     const etaMinutes = dResult.totalCost / 60;
     setOnTime(etaMinutes <= priority.responseTimeMax);
-  }, [graph, activeCaseId, myAmbulance, routeTarget, assignedCases]);
+  }, [graph, activeCaseId, myAmbulance, routeTarget, assignedCases, fixedHospital]);
 
   function findNearestHospital(g: CityGraph, fromNode: string): string {
     const hospitals = g.nodes.filter(n => n.type === 'hospital');
@@ -137,8 +142,14 @@ const DriverDashboard: React.FC = () => {
     if (myAmbulance) {
       await supabase.from('ambulances').update({ status: 'en-route', cases_handled: (myAmbulance.cases_handled ?? 0) + 1 }).eq('id', myAmbulance.id);
     }
+    // Lock the nearest hospital based on patient location at accept time
+    const activeEmergency = assignedCases.find(c => c.emergency_id === emergencyId)?.emergency;
+    if (activeEmergency) {
+      setFixedHospital(findNearestHospital(graph, activeEmergency.patient_node));
+    }
     setActiveCaseId(emergencyId);
     setRouteTarget('patient');
+    animStartedRef.current = false;
   };
 
   const handleReject = async (assignmentId: string, emergencyId: string) => {
@@ -155,6 +166,7 @@ const DriverDashboard: React.FC = () => {
   const handleReachedPatient = () => {
     setRouteTarget('hospital');
     setAmbulanceAnim(null);
+    animStartedRef.current = false; // allow animation to start for hospital phase
     if (animRef.current) clearInterval(animRef.current);
   };
 
@@ -165,11 +177,13 @@ const DriverDashboard: React.FC = () => {
       await supabase.from('ambulances').update({ status: 'available' }).eq('id', myAmbulance.id);
     }
     setActiveCaseId(null);
+    setFixedHospital(null);
     setDijkstraResult(null);
     setGreedyResult(null);
     setAstarResult(null);
     setOnTime(null);
     setAmbulanceAnim(null);
+    animStartedRef.current = false;
     if (animRef.current) clearInterval(animRef.current);
   };
 
