@@ -2,8 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { CityGraph, PathResult } from '@/lib/types';
-import { tickTraffic } from '@/lib/graphEngine';
-import { BASE_CITY_GRAPH } from '@/lib/sharedGraph';
+import { useSharedTraffic } from '@/hooks/useSharedTraffic';
 import { dijkstra, greedyBestFirst, astar } from '@/lib/algorithms';
 import GraphVisualization from '@/components/GraphVisualization';
 import AlgorithmComparison from '@/components/AlgorithmComparison';
@@ -12,8 +11,7 @@ import { getPriorityInfo } from '@/lib/priorities';
 
 const DriverDashboard: React.FC = () => {
   const { user, signOut } = useAuth();
-  const [graph, setGraph] = useState<CityGraph>(() => ({ ...BASE_CITY_GRAPH, edges: BASE_CITY_GRAPH.edges.map(e => ({ ...e })) }));
-  const [myAmbulance, setMyAmbulance] = useState<any>(null);
+  const graph = useSharedTraffic();
   const [assignedCases, setAssignedCases] = useState<any[]>([]);
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
   const [dijkstraResult, setDijkstraResult] = useState<PathResult | null>(null);
@@ -25,14 +23,7 @@ const DriverDashboard: React.FC = () => {
   const [ambulanceAnim, setAmbulanceAnim] = useState<{ nodeIndex: number; progress: number } | null>(null);
   const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const animStartedRef = useRef<boolean>(false);
-
-  // Dynamic traffic
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setGraph(prev => tickTraffic(prev, 0.12));
-    }, 3000);
-    return () => clearInterval(interval);
-  }, []);
+  const [myAmbulance, setMyAmbulance] = useState<any>(null);
 
   // Start ambulance animation
   const startAnimation = useCallback((path: string[]) => {

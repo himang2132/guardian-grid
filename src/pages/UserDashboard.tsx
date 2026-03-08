@@ -2,8 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { CityGraph } from '@/lib/types';
-import { tickTraffic } from '@/lib/graphEngine';
-import { BASE_CITY_GRAPH } from '@/lib/sharedGraph';
+import { useSharedTraffic } from '@/hooks/useSharedTraffic';
 import GraphVisualization from '@/components/GraphVisualization';
 import { CASE_PRIORITIES } from '@/lib/priorities';
 import { useNavigate } from 'react-router-dom';
@@ -11,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 const UserDashboard: React.FC = () => {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
-  const [graph, setGraph] = useState<CityGraph>(() => ({ ...BASE_CITY_GRAPH, edges: BASE_CITY_GRAPH.edges.map(e => ({ ...e })) }));
+  const graph = useSharedTraffic();
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [caseType, setCaseType] = useState(CASE_PRIORITIES[0].type);
   const [patientName, setPatientName] = useState('');
