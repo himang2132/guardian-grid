@@ -12,7 +12,9 @@ import LiveClock from '@/components/LiveClock';
 import PageTransition from '@/components/PageTransition';
 import { useEmergencySound } from '@/hooks/useEmergencySound';
 import { getPriorityInfo } from '@/lib/priorities';
+import { downloadCaseReport, CaseReportData } from '@/lib/pdfReport';
 import { toast } from 'sonner';
+import { FileText } from 'lucide-react';
 
 const ESCALATION_TIMEOUT = 20000;
 
