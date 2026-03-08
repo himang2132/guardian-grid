@@ -12,6 +12,17 @@ import { getPriorityInfo } from '@/lib/priorities';
 const DriverDashboard: React.FC = () => {
   const { user, signOut } = useAuth();
   const graph = useSharedTraffic();
+  const [assignedCases, setAssignedCases] = useState<any[]>([]);
+  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
+  const [dijkstraResult, setDijkstraResult] = useState<PathResult | null>(null);
+  const [greedyResult, setGreedyResult] = useState<PathResult | null>(null);
+  const [astarResult, setAstarResult] = useState<PathResult | null>(null);
+  const [routeTarget, setRouteTarget] = useState<'patient' | 'hospital'>('patient');
+  const [fixedHospital, setFixedHospital] = useState<string | null>(null);
+  const [onTime, setOnTime] = useState<boolean | null>(null);
+  const [ambulanceAnim, setAmbulanceAnim] = useState<{ nodeIndex: number; progress: number } | null>(null);
+  const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const animStartedRef = useRef<boolean>(false);
   const [myAmbulance, setMyAmbulance] = useState<any>(null);
 
   // Start ambulance animation
