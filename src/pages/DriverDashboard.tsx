@@ -2,8 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { CityGraph, PathResult } from '@/lib/types';
-import { tickTraffic } from '@/lib/graphEngine';
-import { BASE_CITY_GRAPH } from '@/lib/sharedGraph';
+import { useSharedTraffic } from '@/hooks/useSharedTraffic';
 import { dijkstra, greedyBestFirst, astar } from '@/lib/algorithms';
 import GraphVisualization from '@/components/GraphVisualization';
 import AlgorithmComparison from '@/components/AlgorithmComparison';
