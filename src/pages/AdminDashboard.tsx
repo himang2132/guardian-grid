@@ -317,6 +317,7 @@ const AdminDashboard: React.FC = () => {
                       <th className="text-left py-2 px-3 hidden sm:table-cell">NODE</th>
                       <th className="text-left py-2 px-3">PRIORITY</th>
                       <th className="text-left py-2 px-3">STATUS</th>
+                      <th className="text-left py-2 px-3">REPORT</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -336,6 +337,23 @@ const AdminDashboard: React.FC = () => {
                           <td className="py-2 px-3 font-mono-tech" style={{ color: pInfo.color }}>P{pInfo.priority}</td>
                           <td className={`py-2 px-3 font-orbitron font-bold uppercase ${statusColors[e.status] ?? 'text-foreground'}`}>
                             {e.status}
+                          </td>
+                          <td className="py-2 px-3">
+                            <button
+                              onClick={() => {
+                                const reportData: CaseReportData = {
+                                  caseId: e.id, patientName: e.patient_name, patientPhone: e.patient_phone,
+                                  caseType: e.case_type, priority: e.priority, patientNode: e.patient_node,
+                                  status: e.status, createdAt: e.created_at, updatedAt: e.updated_at,
+                                  responseTimeMin: e.response_time_min, responseTimeMax: e.response_time_max,
+                                };
+                                downloadCaseReport(reportData);
+                              }}
+                              className="p-1.5 bg-secondary/50 hover:bg-secondary rounded transition-colors"
+                              title="Download PDF Report"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-muted-foreground" />
+                            </button>
                           </td>
                         </tr>
                       );
