@@ -13,20 +13,8 @@ const ESCALATION_TIMEOUT = 20000; // 20s before auto-dispatch
 
 const AdminDashboard: React.FC = () => {
   const { user, signOut } = useAuth();
-  const [graph, setGraph] = useState<CityGraph>(() => ({ ...BASE_CITY_GRAPH, edges: BASE_CITY_GRAPH.edges.map(e => ({ ...e })) }));
+  const graph = useSharedTraffic();
   const [emergencies, setEmergencies] = useState<any[]>([]);
-  const [ambulances, setAmbulances] = useState<any[]>([]);
-  const [assignments, setAssignments] = useState<any[]>([]);
-  const [profiles, setProfiles] = useState<any[]>([]);
-  const [roles, setRoles] = useState<any[]>([]);
-  const [tab, setTab] = useState<'overview' | 'ambulances' | 'cases' | 'drivers' | 'analytics'>('overview');
-  const [analyticsData, setAnalyticsData] = useState<AnalyticsEntry[]>([]);
-
-  // Dynamic traffic
-  useEffect(() => {
-    const interval = setInterval(() => setGraph(prev => tickTraffic(prev, 0.12)), 3000);
-    return () => clearInterval(interval);
-  }, []);
 
   const fetchAll = useCallback(async () => {
     const [emRes, ambRes, assignRes, profRes, roleRes] = await Promise.all([

@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 const UserDashboard: React.FC = () => {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
-  const [graph, setGraph] = useState<CityGraph>(() => ({ ...BASE_CITY_GRAPH, edges: BASE_CITY_GRAPH.edges.map(e => ({ ...e })) }));
+  const graph = useSharedTraffic();
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [caseType, setCaseType] = useState(CASE_PRIORITIES[0].type);
   const [patientName, setPatientName] = useState('');
