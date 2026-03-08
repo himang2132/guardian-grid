@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { forwardRef } from 'react';
 import { motion } from 'framer-motion';
 
 interface PageTransitionProps {
@@ -11,9 +11,10 @@ const pageVariants = {
   exit: { opacity: 0, y: -12 },
 };
 
-const PageTransition: React.FC<PageTransitionProps> = ({ children }) => {
+const PageTransition = forwardRef<HTMLDivElement, PageTransitionProps>(({ children }, ref) => {
   return (
     <motion.div
+      ref={ref}
       variants={pageVariants}
       initial="initial"
       animate="animate"
@@ -23,6 +24,8 @@ const PageTransition: React.FC<PageTransitionProps> = ({ children }) => {
       {children}
     </motion.div>
   );
-};
+});
+
+PageTransition.displayName = 'PageTransition';
 
 export default PageTransition;
