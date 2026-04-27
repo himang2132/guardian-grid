@@ -111,10 +111,18 @@ export function greedyBestFirst(graph: CityGraph, start: string, end: string): P
   const adj = buildAdjacencyList(graph);
   const endNode = graph.nodes.find(n => n.id === end)!;
 
-  const heuristic = (nodeId: string) => {
-    const node = graph.nodes.find(n => n.id === nodeId)!;
-    return Math.sqrt((node.x - endNode.x) ** 2 + (node.y - endNode.y) ** 2);
-  };
+ const heuristic = (nodeId: string) => {
+  const node = graph.nodes.find(n => n.id === nodeId);
+  if (!node || !endNode) {
+    console.error("Invalid nodes in heuristic:", nodeId, end);
+    return Infinity;
+  }
+
+  return Math.sqrt(
+    (node.x - endNode.x) ** 2 +
+    (node.y - endNode.y) ** 2
+  );
+};
 
   const visited = new Set<string>();
   const visitedOrder: string[] = [];
@@ -174,11 +182,22 @@ export function astar(graph: CityGraph, start: string, end: string): PathResult 
   const endNode = graph.nodes.find(n => n.id === end)!;
 
   // Heuristic: Euclidean pixel distance scaled to approximate weight
-  const heuristic = (nodeId: string) => {
-    const node = graph.nodes.find(n => n.id === nodeId)!;
-    const pixelDist = Math.sqrt((node.x - endNode.x) ** 2 + (node.y - endNode.y) ** 2);
-    return pixelDist / 30 * 10 * 60 * 0.8; // conservative estimate to stay admissible
-  };
+const heuristic = (nodeId: string) => {
+  const node = graph.nodes.find(n => n.id === nodeId);
+  const endNodeSafe = graph.nodes.find(n => n.id === end);
+
+  if (!node || !endNodeSafe) {
+    console.error("❌ Invalid nodes in A* heuristic:", nodeId, end);
+    return Infinity; // prevents crash
+  }
+
+  const pixelDist = Math.sqrt(
+    (node.x - endNodeSafe.x) ** 2 +
+    (node.y - endNodeSafe.y) ** 2
+  );
+
+  return (pixelDist / 30) * 10 * 60 * 0.8;
+};
 
   const gScore = new Map<string, number>();
   const prev = new Map<string, string | null>();

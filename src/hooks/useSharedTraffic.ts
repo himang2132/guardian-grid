@@ -15,26 +15,27 @@ const TICK_INTERVAL = 3000;
  * broadcasts traffic ticks; all others listen and apply.
  */
 export function useSharedTraffic() {
-  const [graph, setGraph] = useState<CityGraph>(() => ({
-    ...BASE_CITY_GRAPH,
-    edges: BASE_CITY_GRAPH.edges.map(e => ({ ...e })),
-  }));
+  const [graph, setGraph] = useState<CityGraph>(BASE_CITY_GRAPH);
 
   const isLeader = useRef(false);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  // Apply a traffic snapshot (map of edge-index → trafficLevel)
   const applyTraffic = useCallback((data: TrafficData) => {
     setGraph(prev => ({
       ...prev,
-      edges: prev.edges.map((e, i) => (data[i] !== undefined ? { ...e, trafficLevel: data[i] } : e)),
+      edges: prev.edges.map((e, i) =>
+        data[i] !== undefined ? { ...e, trafficLevel: data[i] } : e
+      ),
     }));
   }, []);
 
   useEffect(() => {
+    const myId = crypto.randomUUID(); // ✅ FIXED POSITION
+
     const channel = supabase.channel(CHANNEL_NAME, {
       config: { broadcast: { self: true } },
     });
+
     channelRef.current = channel;
 
     channel
@@ -44,7 +45,6 @@ export function useSharedTraffic() {
         }
       })
       .on('presence', { event: 'sync' }, () => {
-        // First joiner becomes leader
         const state = channel.presenceState();
         const allIds = Object.values(state).flat().map((p: any) => p.id);
         if (allIds.length > 0) {
@@ -57,21 +57,15 @@ export function useSharedTraffic() {
         }
       });
 
-    const myId = crypto.randomUUID();
-
-    // Tick interval — only the leader broadcasts
     const interval = setInterval(() => {
-      // Always generate locally first, then broadcast if leader
       setGraph(prev => {
         const next = tickTraffic(prev, 0.12);
-        // Build compact traffic map
+
         const traffic: TrafficData = {};
         next.edges.forEach((e, i) => {
           traffic[i] = e.trafficLevel;
         });
 
-        // Broadcast (even non-leaders try; presence determines real leader,
-        // but using self:true + broadcast means everyone stays synced)
         if (isLeader.current) {
           channel.send({
             type: 'broadcast',

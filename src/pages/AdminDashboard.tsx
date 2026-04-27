@@ -56,15 +56,21 @@ const AdminDashboard: React.FC = () => {
   }, [playAlert]);
 
   useEffect(() => {
-    fetchAll();
-    const channel = supabase
-      .channel('admin-all')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'emergencies' }, () => fetchAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'ambulances' }, () => fetchAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'emergency_assignments' }, () => fetchAll())
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [fetchAll]);
+  if (!user) return; // 🔥 wait for login
+
+  fetchAll();
+
+  const channel = supabase
+    .channel('admin-all')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'emergencies' }, () => fetchAll())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ambulances' }, () => fetchAll())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'emergency_assignments' }, () => fetchAll())
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [user]); // ✅ depend on user
 
   // Auto-escalation
   useEffect(() => {
@@ -81,39 +87,75 @@ const AdminDashboard: React.FC = () => {
   }, [emergencies, ambulances, graph]);
 
   const handleDispatch = async (emergencyId: string) => {
-    const emergency = emergencies.find(e => e.id === emergencyId);
-    if (!emergency) return;
+  const emergency = emergencies.find(e => e.id === emergencyId);
+  if (!emergency) return;
 
-    const available = ambulances.filter(a => a.status === 'available');
-    if (available.length === 0) return;
+  console.log("🚨 Selected Emergency:", emergency);
+  console.log("🚑 All Ambulances:", ambulances);
+  console.log("🧠 Graph Nodes:", graph.nodes.map(n => n.id));
 
-    let bestAmb = available[0];
-    let bestCost = Infinity;
+  const available = ambulances.filter(a => a.status === 'available');
+  if (available.length === 0) return;
 
-    for (const amb of available) {
-      const dResult = dijkstra(graph, amb.current_node, emergency.patient_node);
-      const gResult = greedyBestFirst(graph, amb.current_node, emergency.patient_node);
-      const aResult = astar(graph, amb.current_node, emergency.patient_node);
-      const minCost = Math.min(dResult.totalCost, gResult.totalCost, aResult.totalCost);
-      if (minCost < bestCost) {
-        bestCost = minCost;
-        bestAmb = amb;
-      }
+  let bestAmb = available[0];
+  let bestCost = Infinity;
+
+  for (const amb of available) {
+    const validStart = graph.nodes.find(n => n.id === amb.current_node)
+      ? amb.current_node
+      : graph.nodes[0].id;
+
+    const validEnd = graph.nodes.find(n => n.id === emergency.patient_node)
+      ? emergency.patient_node
+      : graph.nodes[1].id;
+
+    const dResult = dijkstra(graph, validStart, validEnd);
+    const gResult = greedyBestFirst(graph, validStart, validEnd);
+    const aResult = astar(graph, validStart, validEnd);
+
+    const minCost = Math.min(
+      dResult.totalCost,
+      gResult.totalCost,
+      aResult.totalCost
+    );
+
+    if (minCost < bestCost) {
+      bestCost = minCost;
+      bestAmb = amb;
     }
+  }
 
-    const dResult = dijkstra(graph, bestAmb.current_node, emergency.patient_node);
-    const gResult = greedyBestFirst(graph, bestAmb.current_node, emergency.patient_node);
-    const aResult = astar(graph, bestAmb.current_node, emergency.patient_node);
-    const costs = [
-      { algo: 'dijkstra' as const, cost: dResult.totalCost },
-      { algo: 'greedy' as const, cost: gResult.totalCost },
-      { algo: 'astar' as const, cost: aResult.totalCost },
-    ];
-    const winner = costs.reduce((a, b) => a.cost <= b.cost ? a : b);
-    const pInfo = getPriorityInfo(emergency.case_type);
-    const onTime = bestCost / 60 <= pInfo.responseTimeMax;
+  // ✅ Recalculate for best ambulance (IMPORTANT)
+  const validStart = graph.nodes.find(n => n.id === bestAmb.current_node)
+    ? bestAmb.current_node
+    : graph.nodes[0].id;
 
-    setAnalyticsData(prev => [...prev, {
+  const validEnd = graph.nodes.find(n => n.id === emergency.patient_node)
+    ? emergency.patient_node
+    : graph.nodes[1].id;
+
+  console.log("🚑 Selected Ambulance:", bestAmb);
+  console.log("📍 Start Node:", validStart);
+  console.log("📍 End Node:", validEnd);
+
+  const dResult = dijkstra(graph, validStart, validEnd);
+  const gResult = greedyBestFirst(graph, validStart, validEnd);
+  const aResult = astar(graph, validStart, validEnd);
+
+  const costs = [
+    { algo: 'dijkstra' as const, cost: dResult.totalCost },
+    { algo: 'greedy' as const, cost: gResult.totalCost },
+    { algo: 'astar' as const, cost: aResult.totalCost },
+  ];
+
+  const winner = costs.reduce((a, b) => (a.cost <= b.cost ? a : b));
+
+  const pInfo = getPriorityInfo(emergency.case_type);
+  const onTime = bestCost / 60 <= pInfo.responseTimeMax;
+
+  setAnalyticsData(prev => [
+    ...prev,
+    {
       timestamp: Date.now(),
       emergencyId: emergency.id,
       caseType: emergency.case_type,
@@ -126,18 +168,37 @@ const AdminDashboard: React.FC = () => {
       winner: winner.algo,
       responseTimeSec: bestCost,
       onTime,
-    }]);
+    },
+  ]);
 
-    await supabase.from('emergency_assignments').insert([{
+  await supabase.from('emergency_assignments').insert([
+    {
       emergency_id: emergencyId,
       ambulance_id: bestAmb.id,
       action: 'pending',
-      route_data: { dijkstra: dResult, greedy: gResult, astar: aResult, winner: winner.algo } as any,
-    }]);
-    await supabase.from('emergencies').update({ status: 'assigned' }).eq('id', emergencyId);
-    await supabase.from('ambulances').update({ status: 'en-route' }).eq('id', bestAmb.id);
-    toast.success('🚑 Ambulance Dispatched', { description: `${bestAmb.name} dispatched to ${emergency.patient_name}` });
-  };
+      route_data: {
+        dijkstra: dResult,
+        greedy: gResult,
+        astar: aResult,
+        winner: winner.algo,
+      } as any,
+    },
+  ]);
+
+  await supabase
+    .from('emergencies')
+    .update({ status: 'assigned' })
+    .eq('id', emergencyId);
+
+  await supabase
+    .from('ambulances')
+    .update({ status: 'en-route' })
+    .eq('id', bestAmb.id);
+
+  toast.success('🚑 Ambulance Dispatched', {
+    description: `${bestAmb.name} dispatched to ${emergency.patient_name}`,
+  });
+};
 
   const handleAssignDriver = async (ambulanceId: string, driverId: string) => {
     await supabase.from('ambulances').update({ driver_id: driverId }).eq('id', ambulanceId);
@@ -240,14 +301,15 @@ const AdminDashboard: React.FC = () => {
 
               <div className="lg:col-span-2 panel-gradient border border-border rounded-lg p-2 h-[400px] md:h-[500px]">
                 <GraphVisualization
-                  graph={graph}
-                  selectedStart={null}
-                  selectedEnd={null}
-                  pathResult={null}
-                  secondaryPath={null}
-                  onNodeClick={() => {}}
-                  showHeatmap={true}
-                />
+  graph={graph}
+  ambulances={ambulances}   // ✅ ADD THIS
+  selectedStart={null}
+  selectedEnd={null}
+  pathResult={null}
+  secondaryPath={null}
+  onNodeClick={() => {}}
+  showHeatmap={true}
+/>
               </div>
             </div>
           )}
@@ -274,7 +336,11 @@ const AdminDashboard: React.FC = () => {
                       return (
                         <tr key={amb.id} className="border-b border-border/50">
                           <td className="py-2 px-3 font-mono-tech text-foreground">{amb.name}</td>
-                          <td className="py-2 px-3 font-mono-tech text-foreground">{amb.current_node}</td>
+                          <td className="py-2 px-3 font-mono-tech text-foreground">
+  {graph.nodes.find(n => n.id === amb.current_node)
+    ? amb.current_node
+    : graph.nodes[0]?.id}
+</td>
                           <td className="py-2 px-3">
                             <span className={`font-orbitron font-bold ${amb.status === 'available' ? 'text-accent' : 'text-emergency-orange'}`}>
                               {amb.status?.toUpperCase()}
